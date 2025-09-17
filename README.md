@@ -40,17 +40,3 @@ Live URL: https://eco-track-ai.netlify.app/
 
 👨‍💻 Author
 Developed by @narmadakorupolu2000
-
-yaml
-Copy code
-
----
-
-This is all in **one continuous file** with minimal gaps.  
-
-You can save it as README.md, commit, and push:
-
-bash
-git add README.md
-git commit -m "Add clean README for Eco-Track AI"
-git push origin main
