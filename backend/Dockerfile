@@ -18,10 +18,10 @@ ENV CARGO_HOME=/tmp/cargo
 ENV CARGO_TARGET_DIR=/tmp/cargo_target
 
 # Set working directory
-WORKDIR /app
+WORKDIR /backend
 
 # Copy requirements first to cache dependencies
-COPY requirements.txt ./
+COPY ../backend-requirements.txt ./
 
 # Install Python dependencies
 RUN pip install --upgrade pip
