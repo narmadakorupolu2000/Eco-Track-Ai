@@ -1,8 +1,9 @@
-import type React from "react"
-import type { Metadata } from "next"
-import { GeistSans } from "geist/font/sans"
-import { GeistMono } from "geist/font/mono"
+import { Providers } from "@/components/providers"
 import { Analytics } from "@vercel/analytics/next"
+import { GeistMono } from "geist/font/mono"
+import { GeistSans } from "geist/font/sans"
+import type { Metadata } from "next"
+import type React from "react"
 import { Suspense } from "react"
 import "./globals.css"
 
@@ -21,7 +22,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`font-sans ${GeistSans.variable} ${GeistMono.variable}`}>
-        <Suspense fallback={null}>{children}</Suspense>
+        <Providers>
+          <Suspense fallback={null}>{children}</Suspense>
+        </Providers>
         <Analytics />
       </body>
     </html>

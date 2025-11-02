@@ -1,6 +1,27 @@
 version: '3.8'
 
 services:
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - JWT_SECRET=${JWT_SECRET}
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
+      - CLOUDINARY_URL=${CLOUDINARY_URL}
+      - SMTP_SERVER=${SMTP_SERVER}
+      - SMTP_PORT=${SMTP_PORT}
+      - SENDER_EMAIL=${SENDER_EMAIL}
+      - SENDER_PASSWORD=${SENDER_PASSWORD}
+      - FRONTEND_ORIGINS=http://localhost,http://localhost:3000,http://nginx
+    networks:
+      - ecotrack-network
+    restart: unless-stopped
+
   # Next.js Application
   ecotrack-app:
     build:
@@ -10,6 +31,7 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      - NEXT_PUBLIC_BACKEND_URL=http://backend:8000
       - GROQ_API_KEY=${GROQ_API_KEY}
       - DATABASE_URL=${DATABASE_URL}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
@@ -17,6 +39,7 @@ services:
     depends_on:
       - postgres
       - redis
+      - backend
     networks:
       - ecotrack-network
     restart: unless-stopped
@@ -60,6 +83,7 @@ services:
       - ./ssl:/etc/nginx/ssl
     depends_on:
       - ecotrack-app
+      - backend
     networks:
       - ecotrack-network
     restart: unless-stopped

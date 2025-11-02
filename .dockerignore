@@ -1,0 +1,67 @@
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Build outputs
+.next
+out
+dist
+build
+*.egg-info
+
+# Environment and secrets
+.env
+.env.local
+.env*.local
+*.env
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+coverage
+.pytest_cache
+.coverage
+htmlcov
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation (keep DEPLOYMENT.md and TESTING.md in final image)
+# README.md
+
+# Logs
+*.log
+logs
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Temporary files
+tmp
+temp
+*.tmp
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore

@@ -2,6 +2,17 @@
 
 # dependencies
 /node_modules
+/backend/__pycache__
+/backend/app/__pycache__
+/backend/app/models/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.venv
 
 # next.js
 /.next/
@@ -16,8 +27,13 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
-.env*
+# env files (NEVER commit these!)
+.env
+.env.local
+.env*.local
+.env.development
+.env.production
+backend/.env
 
 # vercel
 .vercel
@@ -25,3 +41,38 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Backup files
+*.backup
+*.bak
+*.old
+
+# Requirements (only commit specific files)
+all-requirements.txt
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+.cache/

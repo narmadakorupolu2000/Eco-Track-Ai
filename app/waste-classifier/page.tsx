@@ -2,43 +2,147 @@
 
 import type React from "react"
 
-import { useState, useRef } from "react"
-import Link from "next/link"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Progress } from "@/components/ui/progress"
+import { useAuth } from "@/contexts/AuthContext"
+import { toast } from '@/hooks/use-toast'
 import {
-  Leaf,
-  Camera,
-  Upload,
-  X,
-  CheckCircle,
-  AlertCircle,
-  Recycle,
-  Trash2,
-  Settings,
-  LogOut,
-  Bell,
-  Search,
+    AlertCircle,
+    Bell,
+    Camera,
+    CheckCircle,
+    Leaf,
+    LogOut,
+    Recycle,
+    Search,
+    Settings,
+    Trash2,
+    Upload,
+    X,
 } from "lucide-react"
+import Link from "next/link"
+import { useEffect, useRef, useState } from "react"
 
 interface ClassificationResult {
   category: string
+  item?: string
+  recyclability?: string
+  is_waste?: boolean
   confidence: number
   disposal: string
   tips: string[]
   environmental_impact: string
   points_earned: number
+  carbon_impact?: number
+  carbon_source?: string
+  low_confidence?: boolean
+  advice?: string
+}
+
+interface RecentClassification {
+  item_name: string
+  category: string
+  disposal: string
+  color: string
+  points_earned: number
+  carbon_impact: number
+  timestamp: string
 }
 
 export default function WasteClassifierPage() {
+  const { user, isAuthenticated } = useAuth()
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isClassifying, setIsClassifying] = useState(false)
   const [result, setResult] = useState<ClassificationResult | null>(null)
   const [error, setError] = useState("")
+  const [recentClassifications, setRecentClassifications] = useState<RecentClassification[]>([])
+  const [loadingRecent, setLoadingRecent] = useState(true)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [isClearDialogOpen, setIsClearDialogOpen] = useState(false)
+  const [isClearing, setIsClearing] = useState(false)
+  const [verifiedInfo, setVerifiedInfo] = useState<{ is_waste: boolean; confidence: number } | null>(null)
+
+  // Backend URL from environment
+  const backendBase = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000'
+  
+  // Local recents storage key for unauthenticated users
+  const LOCAL_RECENTS_KEY = "ecotrack_recent_classifications"
+
+  const loadLocalRecents = (): RecentClassification[] => {
+    try {
+      const raw = localStorage.getItem(LOCAL_RECENTS_KEY)
+      if (!raw) return []
+      return JSON.parse(raw) as RecentClassification[]
+    } catch (e) {
+      console.error("Failed to load local recents", e)
+      return []
+    }
+  }
+
+  const saveLocalRecent = (entry: RecentClassification) => {
+    try {
+      const cur = loadLocalRecents()
+      cur.unshift(entry)
+      const trimmed = cur.slice(0, 10)
+      localStorage.setItem(LOCAL_RECENTS_KEY, JSON.stringify(trimmed))
+      setRecentClassifications(trimmed)
+    } catch (e) {
+      console.error("Failed to save local recent", e)
+    }
+  }
+
+  // Fetch recent classifications
+  useEffect(() => {
+    const fetchRecentClassifications = async () => {
+      // Always load local recents first
+      const local = loadLocalRecents()
+      if (local.length) {
+        setRecentClassifications(local)
+      }
+
+      if (!isAuthenticated) {
+        setLoadingRecent(false)
+        return
+      }
+
+      try {
+        setLoadingRecent(true)
+        const token = localStorage.getItem('auth_token')
+        
+        if (!token) return
+
+        const response = await fetch(`${backendBase}/api/user/classifications?limit=5`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        })
+
+        if (response.ok) {
+          const data = await response.json()
+          // Merge server recents with local, preferring server entries and then filling with local
+          const server: RecentClassification[] = data.classifications || []
+          const merged = [...server]
+          for (const l of local) {
+            if (!merged.find((s) => s.item_name === l.item_name && s.timestamp === l.timestamp)) {
+              merged.push(l)
+            }
+          }
+          setRecentClassifications(merged.slice(0, 10))
+        }
+      } catch (err) {
+        console.error('Error fetching classifications:', err)
+      } finally {
+        setLoadingRecent(false)
+      }
+    }
+
+    fetchRecentClassifications()
+  }, [isAuthenticated])
 
   const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -55,6 +159,7 @@ export default function WasteClassifierPage() {
         setResult(null)
       }
       reader.readAsDataURL(file)
+      setSelectedFile(file)
     }
   }
 
@@ -65,27 +170,124 @@ export default function WasteClassifierPage() {
     setError("")
 
     try {
-      // Simulate AI classification - in real app, this would call the AI API
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      let res: Response
 
-      // Mock classification result
-      const mockResult: ClassificationResult = {
-        category: "Plastic Bottle (PET #1)",
-        confidence: 94.5,
-        disposal: "Recyclable - Place in recycling bin",
-        tips: [
-          "Remove cap and label if possible",
-          "Rinse out any remaining liquid",
-          "Crush to save space in recycling bin",
-          "Check local recycling guidelines for PET plastics",
-        ],
-        environmental_impact: "Recycling this bottle saves 0.2kg of CO2 emissions",
-        points_earned: 15,
+      // Decide which classifier to call.
+      // Use mock if toggled, otherwise call FastAPI backend directly for Perplexity classification.
+      const useMock = (process.env.NEXT_PUBLIC_USE_MOCK || 'false') === 'true'
+      const endpoint = useMock ? `${backendBase}/api/waste-classify-mock` : `${backendBase}/api/waste-classify`
+
+      console.log('🔍 Classification Debug:', {
+        backendBase,
+        endpoint,
+        hasFile: !!selectedFile,
+        hasImage: !!selectedImage,
+        imageType: selectedFile ? 'file' : 'dataURL'
+      })
+
+      // If we have a File object, send multipart/form-data
+      if (selectedFile) {
+        const form = new FormData()
+        form.append('file', selectedFile)
+        console.log('📤 Sending FormData with file:', selectedFile.name, selectedFile.type, selectedFile.size)
+        res = await fetch(endpoint, {
+          method: 'POST',
+          body: form,
+        })
+      } else {
+        // Fallback: selectedImage is a data URL string
+        console.log('📤 Sending JSON with data URL (length:', selectedImage.length, ')')
+        res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: selectedImage }),
+        })
       }
 
-      setResult(mockResult)
+      console.log('📥 Response status:', res.status, res.statusText)
+
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        console.error('Classification API error:', err)
+        const errorMsg = err.detail || err.message || `Classification failed (${res.status})`
+        setError(errorMsg)
+        toast({
+          title: 'Classification Failed',
+          description: errorMsg,
+          variant: 'destructive',
+        })
+        return
+      }
+
+      const data = await res.json()
+      if (data?.result) {
+        setResult(data.result)
+        setVerifiedInfo(data.verified || null)
+
+        // Optionally save classification to backend as activity if authenticated
+        if (isAuthenticated) {
+          try {
+            const token = localStorage.getItem('auth_token')
+            if (token) {
+              // Log as a tracking activity
+              await fetch(`${backendBase}/api/tracking/log`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  activity_type: 'classify_waste',
+                  description: `Classified: ${data.result.category || 'Unknown'}${data.result.item ? ` - ${data.result.item}` : ''}`,
+                  points_earned: data.result.points_earned || 0,
+                  carbon_impact: data.result.carbon_impact || 0,
+                }),
+              })
+
+              // Refresh recent classifications
+              const resp = await fetch(`${backendBase}/api/user/classifications?limit=5`, {
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                },
+              })
+              if (resp.ok) {
+                const refreshed = await resp.json()
+                setRecentClassifications(refreshed.classifications || [])
+              }
+            }
+          } catch (err) {
+            console.error('Error saving classification:', err)
+          }
+        }
+        // Also save to local recents so unauthenticated users see history
+        try {
+          const now = new Date().toISOString()
+          const localEntry: RecentClassification = {
+            item_name: data.result.category || 'Unknown',
+            category: data.result.category || 'unknown',
+            disposal: data.result.disposal || 'Unknown',
+            color: 'gray',
+            points_earned: data.result.points_earned || 0,
+            carbon_impact: 0,
+            timestamp: now,
+          }
+          saveLocalRecent(localEntry)
+        } catch (e) {
+          console.error('Error saving local recent', e)
+        }
+      } else {
+        setError('Classification returned no result')
+      }
     } catch (err) {
-      setError("Classification failed. Please try again.")
+      console.error('Classification error:', err)
+      const errorMsg = err instanceof Error ? err.message : 'Network error - cannot reach backend'
+      setError(errorMsg)
+      toast({
+        title: 'Classification Error',
+        description: errorMsg,
+        variant: 'destructive',
+      })
     } finally {
       setIsClassifying(false)
     }
@@ -100,8 +302,58 @@ export default function WasteClassifierPage() {
     }
   }
 
+  const handleClearConfirmed = async () => {
+    setIsClearing(true)
+
+    // Clear local recents first
+    try {
+      localStorage.removeItem(LOCAL_RECENTS_KEY)
+      setRecentClassifications([])
+      toast({ title: 'History cleared', description: 'Local recent classifications were removed.' })
+    } catch (e) {
+      console.error('Failed to clear local recents', e)
+      toast({ title: 'Error', description: 'Failed to clear local history', variant: 'destructive' })
+    }
+
+    // If authenticated, attempt to clear server-side recents as well
+    if (isAuthenticated) {
+      try {
+        const token = localStorage.getItem('auth_token')
+        if (token) {
+          const resp = await fetch('/api/user/classifications', {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${token}` },
+          })
+          if (resp.ok) {
+            if (resp.status === 202) {
+              toast({ title: 'Server queued', description: 'Backend unavailable — clear request queued for retry.' })
+            } else {
+              toast({ title: 'Server history cleared', description: 'Server-side recent classifications deleted.' })
+            }
+          } else {
+            toast({ title: 'Partial success', description: 'Local history cleared but server clear failed.', variant: 'destructive' })
+          }
+        }
+      } catch (err) {
+        console.error('Failed to clear server recents', err)
+        toast({ title: 'Server error', description: 'Could not clear server-side history', variant: 'destructive' })
+      }
+    }
+
+    setIsClearing(false)
+    setIsClearDialogOpen(false)
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 dark:from-green-950 dark:to-blue-950">
+    <div className="relative min-h-screen bg-gradient-to-br from-green-50 to-blue-50 dark:from-green-950 dark:to-blue-950">
+      {isClearing && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="bg-white dark:bg-gray-900 rounded-lg p-4 flex items-center gap-3 shadow-lg">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-600" />
+            <div className="text-sm font-medium">Clearing history…</div>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <header className="border-b bg-white/80 backdrop-blur-sm dark:bg-gray-900/80">
         <div className="container mx-auto px-4 py-4">
@@ -272,11 +524,34 @@ export default function WasteClassifierPage() {
                   </div>
                 ) : (
                   <div className="space-y-6">
+                    {/* If verifier indicates not-waste, show a helpful banner */}
+                    {((verifiedInfo && verifiedInfo.is_waste === false) || result.is_waste === false || result.category === 'Not waste') && (
+                      <div className="p-3 rounded-md bg-yellow-50 border border-yellow-200 text-yellow-800 dark:bg-yellow-900/20">
+                        <div className="font-semibold">This image does not appear to be waste</div>
+                        <div className="text-sm mt-1">Try uploading a clearer photo focused on the item, or ensure the photo shows the object you want classified (avoid people, scenery, receipts). The model confidence: {verifiedInfo?.confidence ?? 0}%.</div>
+                      </div>
+                    )}
+                    {result.low_confidence && (
+                      <div className="p-3 rounded-md bg-orange-50 border border-orange-200 text-orange-800 dark:bg-orange-900/20">
+                        <div className="font-semibold">Low confidence result</div>
+                        <div className="text-sm mt-1">{result.advice || 'Retake a clear, well-lit photo focusing on a single item. Avoid background clutter and reflective glare.'}</div>
+                      </div>
+                    )}
                     {/* Classification */}
                     <div>
                       <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-semibold text-lg">{result.category}</h3>
-                        <Badge variant="secondary">{result.confidence}% confident</Badge>
+                        <div>
+                          <h3 className="font-semibold text-lg">{result.category}</h3>
+                          {result.item && (
+                            <p className="text-sm text-gray-500">Item: {result.item}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {result.recyclability && (
+                            <Badge variant="outline">{result.recyclability}</Badge>
+                          )}
+                          <Badge variant="secondary">{result.confidence}% confident</Badge>
+                        </div>
                       </div>
                       <Progress value={result.confidence} className="mb-4" />
                     </div>
@@ -313,6 +588,9 @@ export default function WasteClassifierPage() {
                         <h4 className="font-semibold text-blue-800 dark:text-blue-400">Environmental Impact</h4>
                       </div>
                       <p className="text-blue-700 dark:text-blue-300">{result.environmental_impact}</p>
+                      {typeof result.carbon_impact === 'number' && (
+                        <p className="text-sm text-blue-600/80 mt-2">Estimated carbon impact: {result.carbon_impact.toFixed(2)} kg CO₂e {result.carbon_source ? `(source: ${result.carbon_source})` : ''}</p>
+                      )}
                     </div>
 
                     {/* Points Earned */}
@@ -333,59 +611,93 @@ export default function WasteClassifierPage() {
           {/* Recent Classifications */}
           <Card className="mt-8">
             <CardHeader>
-              <CardTitle>Recent Classifications</CardTitle>
-              <CardDescription>Your latest waste classification history.</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Recent Classifications</CardTitle>
+                    <CardDescription>Your latest waste classification history.</CardDescription>
+                  </div>
+                  <div>
+                    <Dialog open={isClearDialogOpen} onOpenChange={setIsClearDialogOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" size="sm">Clear history</Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Clear recent classifications</DialogTitle>
+                          <DialogDescription>This will remove local recent classifications and attempt to clear server history. This action cannot be undone.</DialogDescription>
+                        </DialogHeader>
+                        <DialogFooter>
+                          <Button variant="ghost" onClick={() => setIsClearDialogOpen(false)} disabled={isClearing}>Cancel</Button>
+                          <Button variant="destructive" onClick={handleClearConfirmed} className="ml-2" disabled={isClearing}>
+                            {isClearing ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                                Clearing...
+                              </>
+                            ) : (
+                              'Confirm'
+                            )}
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                </div>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-green-100 dark:bg-green-900 rounded-lg flex items-center justify-center">
-                      <Recycle className="h-6 w-6 text-green-600" />
-                    </div>
-                    <div>
-                      <p className="font-medium">Aluminum Can</p>
-                      <p className="text-sm text-gray-500">2 hours ago</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <Badge variant="secondary">Recyclable</Badge>
-                    <p className="text-sm text-gray-500 mt-1">+20 points</p>
-                  </div>
+              {loadingRecent ? (
+                <div className="text-center py-8">
+                  <p className="text-sm text-gray-500">Loading classifications...</p>
                 </div>
+              ) : recentClassifications.length > 0 ? (
+                <div className="space-y-4">
+                  {recentClassifications.map((classification, index) => {
+                    // Determine icon and background color
+                    const colorMap: Record<string, { bg: string; icon: string; text: string }> = {
+                      'green': { bg: 'bg-green-100 dark:bg-green-900', icon: 'text-green-600', text: 'text-green-700' },
+                      'blue': { bg: 'bg-blue-100 dark:bg-blue-900', icon: 'text-blue-600', text: 'text-blue-700' },
+                      'red': { bg: 'bg-red-100 dark:bg-red-900', icon: 'text-red-600', text: 'text-red-700' },
+                      'yellow': { bg: 'bg-yellow-100 dark:bg-yellow-900', icon: 'text-yellow-600', text: 'text-yellow-700' },
+                      'purple': { bg: 'bg-purple-100 dark:bg-purple-900', icon: 'text-purple-600', text: 'text-purple-700' },
+                      'gray': { bg: 'bg-gray-100 dark:bg-gray-900', icon: 'text-gray-600', text: 'text-gray-700' }
+                    }
+                    const colors = colorMap[classification.color] || colorMap['gray']
+                    const IconComponent = classification.disposal === 'Compostable' ? Trash2 : Recycle
 
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-red-100 dark:bg-red-900 rounded-lg flex items-center justify-center">
-                      <Trash2 className="h-6 w-6 text-red-600" />
-                    </div>
-                    <div>
-                      <p className="font-medium">Food Waste</p>
-                      <p className="text-sm text-gray-500">1 day ago</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <Badge variant="secondary">Compostable</Badge>
-                    <p className="text-sm text-gray-500 mt-1">+10 points</p>
-                  </div>
-                </div>
+                    // Format timestamp
+                    const timeAgo = new Date(classification.timestamp).toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: 'numeric',
+                      minute: 'numeric'
+                    })
 
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900 rounded-lg flex items-center justify-center">
-                      <Recycle className="h-6 w-6 text-blue-600" />
-                    </div>
-                    <div>
-                      <p className="font-medium">Glass Bottle</p>
-                      <p className="text-sm text-gray-500">2 days ago</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <Badge variant="secondary">Recyclable</Badge>
-                    <p className="text-sm text-gray-500 mt-1">+15 points</p>
-                  </div>
+                    return (
+                      <div key={index} className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                        <div className="flex items-center gap-4">
+                          <div className={`w-12 h-12 ${colors.bg} rounded-lg flex items-center justify-center`}>
+                            <IconComponent className={`h-6 w-6 ${colors.icon}`} />
+                          </div>
+                          <div>
+                            <p className="font-medium">{classification.item_name}</p>
+                            <p className="text-sm text-gray-500">{timeAgo}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <Badge variant="secondary">{classification.disposal}</Badge>
+                          <p className="text-sm text-gray-500 mt-1">+{classification.points_earned} points</p>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
-              </div>
+              ) : (
+                <div className="text-center py-8">
+                  <Camera className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+                  <p className="text-sm text-gray-500">No classifications yet</p>
+                  <p className="text-xs text-gray-400 mt-1">Upload an image to start classifying waste!</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

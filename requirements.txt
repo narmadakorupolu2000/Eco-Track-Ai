@@ -1,3 +1,20 @@
-passlib
-pymongo
-PyJWT
+# Backend Python Requirements
+# This file is kept for backward compatibility
+# For better organization, use: backend-requirements.txt
+# 
+# Install with: pip install -r requirements.txt
+# Or: pip install -r backend-requirements.txt
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+motor==3.3.2
+bcrypt>=4.1.0
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.6
+python-dotenv==1.0.0
+pymongo>=4.15.3
+PyJWT==2.8.0
+pydantic==2.5.0
+email-validator==2.1.0
+requests==2.31.0
+openai>=1.0.0

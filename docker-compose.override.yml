@@ -1,0 +1,27 @@
+# Docker Compose override for local development
+# This file is automatically loaded alongside docker-compose.yml
+# Use: docker-compose up (no extra flags needed)
+
+version: '3.8'
+
+services:
+  backend:
+    volumes:
+      # Mount local backend code for hot reload
+      - ./backend:/app/backend
+    environment:
+      # Override for dev
+      - FRONTEND_ORIGINS=http://localhost,http://localhost:3000,http://127.0.0.1:3000
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  ecotrack-app:
+    volumes:
+      # Mount for hot reload (Next.js dev mode)
+      - ./app:/app/app
+      - ./components:/app/components
+      - ./lib:/app/lib
+      - ./public:/app/public
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_BACKEND_URL=http://backend:8000
+    command: npm run dev

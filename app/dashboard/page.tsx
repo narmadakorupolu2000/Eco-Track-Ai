@@ -1,40 +1,143 @@
 "use client"
 
-import { useState } from "react"
-import Link from "next/link"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
+import { useAuth } from "@/contexts/AuthContext"
 import {
-  Leaf,
-  Camera,
-  MessageCircle,
-  TrendingUp,
-  Award,
-  Target,
-  Users,
-  Settings,
-  LogOut,
-  Bell,
-  Search,
+    Award,
+    Bell,
+    Camera,
+    Leaf,
+    LogOut,
+    MessageCircle,
+    Search,
+    Settings,
+    Target,
+    TrendingUp,
+    Users,
 } from "lucide-react"
+import Link from "next/link"
+import { useEffect, useState } from "react"
 
 export default function DashboardPage() {
-  const [user] = useState({
-    name: "John Doe",
-    email: "john@example.com",
-    points: 1250,
-    level: "Eco Warrior",
-    streak: 7,
+  const { user, logout, isAuthenticated, isLoading } = useAuth()
+  
+  // State for dashboard data
+  const [stats, setStats] = useState({
+    carbonSaved: 0,
+    itemsClassified: 0,
+    weeklyGoal: 100,
+    weeklyProgress: 0,
+    points: 0,
+    level: "Eco Beginner",
+    streak: 0,
   })
+  const [activities, setActivities] = useState<any[]>([])
+  const [achievements, setAchievements] = useState<any[]>([])
+  const [communityStats, setCommunityStats] = useState({
+    totalCarbonSaved: 0,
+    totalItemsClassified: 0,
+    activeUsers: 0,
+    totalUsers: 0,
+  })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
 
-  const [stats] = useState({
-    carbonSaved: 45.2,
-    itemsClassified: 128,
-    weeklyGoal: 75,
-    weeklyProgress: 60,
-  })
+  // Fetch dashboard data from backend
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      if (!isAuthenticated || !user) return
+      
+      try {
+        setLoading(true)
+        const token = localStorage.getItem('auth_token')
+        
+        if (!token) {
+          console.error('No auth token found')
+          return
+        }
+
+        const response = await fetch('http://localhost:8000/api/user/dashboard', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch dashboard data')
+        }
+
+        const data = await response.json()
+        
+        // Update stats from backend
+        setStats({
+          carbonSaved: data.stats.carbon_saved || 0,
+          itemsClassified: data.stats.items_classified || 0,
+          weeklyGoal: data.stats.weekly_goal || 100,
+          weeklyProgress: data.stats.weekly_progress || 0,
+          points: data.stats.total_points || 0,
+          level: data.stats.level || "Eco Beginner",
+          streak: data.stats.streak_days || 0,
+        })
+
+        // Update activities
+        setActivities(data.recent_activities || [])
+        
+        // Update achievements
+        setAchievements(data.achievements || [])
+        
+        // Update community stats
+        setCommunityStats({
+          totalCarbonSaved: data.community_stats.total_carbon_saved || 0,
+          totalItemsClassified: data.community_stats.total_items_classified || 0,
+          activeUsers: data.community_stats.active_users || 0,
+          totalUsers: data.community_stats.total_users || 0,
+        })
+        
+      } catch (err: any) {
+        console.error('Error fetching dashboard data:', err)
+        setError(err.message || 'Failed to load dashboard data')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    if (!isLoading && isAuthenticated) {
+      fetchDashboardData()
+    }
+  }, [isAuthenticated, isLoading, user])
+  
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      window.location.href = '/login'
+    }
+  }, [isAuthenticated, isLoading])
+
+  const handleLogout = () => {
+    logout()
+  }
+
+  // Show loading while checking authentication
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 dark:from-green-950 dark:to-blue-950 flex items-center justify-center">
+        <div className="text-center">
+          <Leaf className="h-12 w-12 text-green-600 animate-spin mx-auto mb-4" />
+          <p className="text-gray-600 dark:text-gray-300">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Don't render if not authenticated
+  if (!isAuthenticated || !user) {
+    return null
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 dark:from-green-950 dark:to-blue-950">
@@ -82,7 +185,20 @@ export default function DashboardPage() {
               <Button variant="ghost" size="sm">
                 <Settings className="h-4 w-4" />
               </Button>
-              <Button variant="outline" size="sm">
+              
+              {/* User Profile Info */}
+              <div className="hidden md:flex items-center gap-3 px-3 py-2 border rounded-lg bg-white/50 dark:bg-gray-800/50">
+                <div className="w-8 h-8 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center">
+                  <span className="text-sm font-medium text-green-700 dark:text-green-300">
+                    {user.name.split(' ').map(n => n[0]).join('')}
+                  </span>
+                </div>
+                <div className="text-sm">
+                  <div className="font-medium text-gray-900 dark:text-white">{user.name}</div>
+                </div>
+              </div>
+              
+              <Button variant="outline" size="sm" onClick={handleLogout}>
                 <LogOut className="h-4 w-4 mr-2" />
                 Logout
               </Button>
@@ -97,7 +213,7 @@ export default function DashboardPage() {
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">Welcome back, {user.name}! 👋</h2>
           <p className="text-gray-600 dark:text-gray-300">
-            You're on a {user.streak}-day streak! Keep up the great environmental work.
+            You're on a {stats.streak}-day streak! Keep up the great environmental work.
           </p>
         </div>
 
@@ -111,9 +227,9 @@ export default function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-600">{user.points}</div>
+              <div className="text-2xl font-bold text-green-600">{stats.points}</div>
               <Badge variant="secondary" className="mt-2">
-                {user.level}
+                {stats.level}
               </Badge>
             </CardContent>
           </Card>
@@ -199,32 +315,41 @@ export default function DashboardPage() {
               <CardDescription>Your latest environmental actions.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">Classified plastic bottle</p>
-                    <p className="text-xs text-gray-500">2 hours ago</p>
-                  </div>
-                  <Badge variant="secondary">+10 pts</Badge>
+              {loading ? (
+                <div className="text-center py-4">
+                  <p className="text-sm text-gray-500">Loading activities...</p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">Completed daily challenge</p>
-                    <p className="text-xs text-gray-500">1 day ago</p>
-                  </div>
-                  <Badge variant="secondary">+25 pts</Badge>
+              ) : activities.length > 0 ? (
+                <div className="space-y-4">
+                  {activities.slice(0, 3).map((activity, index) => {
+                    const colors = ['green', 'blue', 'purple', 'orange']
+                    const color = colors[index % colors.length]
+                    const timeAgo = new Date(activity.timestamp).toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: 'numeric',
+                      minute: 'numeric'
+                    })
+                    
+                    return (
+                      <div key={index} className="flex items-center gap-3">
+                        <div className={`w-2 h-2 bg-${color}-500 rounded-full`}></div>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">{activity.description}</p>
+                          <p className="text-xs text-gray-500">{timeAgo}</p>
+                        </div>
+                        <Badge variant="secondary">+{activity.points_earned} pts</Badge>
+                      </div>
+                    )
+                  })}
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">Used EcoChat for recycling tips</p>
-                    <p className="text-xs text-gray-500">2 days ago</p>
-                  </div>
-                  <Badge variant="secondary">+5 pts</Badge>
+              ) : (
+                <div className="text-center py-8">
+                  <TrendingUp className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                  <p className="text-sm text-gray-500">No activities yet</p>
+                  <p className="text-xs text-gray-400 mt-1">Start by classifying waste items!</p>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -240,26 +365,48 @@ export default function DashboardPage() {
               <CardDescription>Badges you've earned for your eco-friendly actions.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="text-center">
-                  <div className="w-12 h-12 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mx-auto mb-2">
-                    <Leaf className="h-6 w-6 text-green-600" />
-                  </div>
-                  <p className="text-xs font-medium">Eco Starter</p>
+              {loading ? (
+                <div className="text-center py-4">
+                  <p className="text-sm text-gray-500">Loading achievements...</p>
                 </div>
-                <div className="text-center">
-                  <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center mx-auto mb-2">
-                    <Camera className="h-6 w-6 text-blue-600" />
-                  </div>
-                  <p className="text-xs font-medium">Classifier Pro</p>
+              ) : achievements.filter(a => a.unlocked).length > 0 ? (
+                <div className="grid grid-cols-3 gap-4">
+                  {achievements.filter(a => a.unlocked).slice(0, 3).map((achievement, index) => {
+                    const iconMap: Record<string, any> = {
+                      'Leaf': Leaf,
+                      'Camera': Camera,
+                      'Target': Target,
+                      'Award': Award,
+                      'TrendingUp': TrendingUp
+                    }
+                    const IconComponent = iconMap[achievement.icon] || Award
+                    const colorMap: Record<string, string> = {
+                      'green': 'bg-green-100 dark:bg-green-900 text-green-600',
+                      'blue': 'bg-blue-100 dark:bg-blue-900 text-blue-600',
+                      'purple': 'bg-purple-100 dark:bg-purple-900 text-purple-600',
+                      'yellow': 'bg-yellow-100 dark:bg-yellow-900 text-yellow-600',
+                      'orange': 'bg-orange-100 dark:bg-orange-900 text-orange-600',
+                      'red': 'bg-red-100 dark:bg-red-900 text-red-600'
+                    }
+                    const colorClass = colorMap[achievement.color] || 'bg-gray-100 dark:bg-gray-900 text-gray-600'
+                    
+                    return (
+                      <div key={index} className="text-center">
+                        <div className={`w-12 h-12 ${colorClass} rounded-full flex items-center justify-center mx-auto mb-2`}>
+                          <IconComponent className="h-6 w-6" />
+                        </div>
+                        <p className="text-xs font-medium">{achievement.name}</p>
+                      </div>
+                    )
+                  })}
                 </div>
-                <div className="text-center">
-                  <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900 rounded-full flex items-center justify-center mx-auto mb-2">
-                    <Target className="h-6 w-6 text-purple-600" />
-                  </div>
-                  <p className="text-xs font-medium">Goal Crusher</p>
+              ) : (
+                <div className="text-center py-8">
+                  <Award className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                  <p className="text-sm text-gray-500">No achievements yet</p>
+                  <p className="text-xs text-gray-400 mt-1">Start classifying waste to unlock badges!</p>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
 
@@ -272,29 +419,47 @@ export default function DashboardPage() {
               <CardDescription>See how you're contributing to the global effort.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-sm font-medium">Global CO2 Saved</span>
-                    <span className="text-sm text-gray-500">2.5M kg</span>
-                  </div>
-                  <Progress value={65} />
+              {loading ? (
+                <div className="text-center py-4">
+                  <p className="text-sm text-gray-500">Loading community stats...</p>
                 </div>
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-sm font-medium">Items Classified</span>
-                    <span className="text-sm text-gray-500">500K+</span>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm font-medium">Global CO2 Saved</span>
+                      <span className="text-sm text-gray-500">
+                        {communityStats.totalCarbonSaved >= 1000 
+                          ? `${(communityStats.totalCarbonSaved / 1000).toFixed(1)}M kg`
+                          : `${communityStats.totalCarbonSaved.toFixed(1)} kg`}
+                      </span>
+                    </div>
+                    <Progress value={Math.min((communityStats.totalCarbonSaved / 10000) * 100, 100)} />
                   </div>
-                  <Progress value={80} />
-                </div>
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-sm font-medium">Active Users</span>
-                    <span className="text-sm text-gray-500">10K+</span>
+                  <div>
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm font-medium">Items Classified</span>
+                      <span className="text-sm text-gray-500">
+                        {communityStats.totalItemsClassified >= 1000
+                          ? `${(communityStats.totalItemsClassified / 1000).toFixed(0)}K+`
+                          : communityStats.totalItemsClassified}
+                      </span>
+                    </div>
+                    <Progress value={Math.min((communityStats.totalItemsClassified / 5000) * 100, 100)} />
                   </div>
-                  <Progress value={45} />
+                  <div>
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm font-medium">Active Users</span>
+                      <span className="text-sm text-gray-500">
+                        {communityStats.activeUsers >= 1000
+                          ? `${(communityStats.activeUsers / 1000).toFixed(0)}K+`
+                          : communityStats.activeUsers}
+                      </span>
+                    </div>
+                    <Progress value={Math.min((communityStats.activeUsers / communityStats.totalUsers) * 100, 100)} />
+                  </div>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
         </div>

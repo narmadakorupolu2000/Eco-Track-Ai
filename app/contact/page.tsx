@@ -1,12 +1,92 @@
-import Link from "next/link"
+"use client"
+
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
-import { Leaf, Mail, MessageSquare, Phone, MapPin } from "lucide-react"
+import { Textarea } from "@/components/ui/textarea"
+import { AlertCircle, CheckCircle, Leaf, Mail, MapPin, MessageSquare, Phone } from "lucide-react"
+import Link from "next/link"
+import { useState } from "react"
+
+interface ContactFormData {
+  firstName: string
+  lastName: string
+  email: string
+  subject: string
+  message: string
+  phone?: string
+  company?: string
+}
 
 export default function ContactPage() {
+  const [formData, setFormData] = useState<ContactFormData>({
+    firstName: "",
+    lastName: "",
+    email: "",
+    subject: "",
+    message: "",
+    phone: "",
+    company: ""
+  })
+  
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitStatus, setSubmitStatus] = useState<{
+    type: 'success' | 'error' | null
+    message: string
+  }>({ type: null, message: "" })
+
+  const handleInputChange = (field: keyof ContactFormData, value: string) => {
+    setFormData(prev => ({ ...prev, [field]: value }))
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsSubmitting(true)
+    setSubmitStatus({ type: null, message: "" })
+
+    try {
+      const response = await fetch('/api/contact/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData)
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        setSubmitStatus({
+          type: 'success',
+          message: result.message || "Thank you for your message! We'll get back to you within 24 hours."
+        })
+        // Reset form
+        setFormData({
+          firstName: "",
+          lastName: "",
+          email: "",
+          subject: "",
+          message: "",
+          phone: "",
+          company: ""
+        })
+      } else {
+        const error = await response.json()
+        setSubmitStatus({
+          type: 'error',
+          message: error.detail || 'Failed to send message. Please try again.'
+        })
+      }
+    } catch (error) {
+      setSubmitStatus({
+        type: 'error',
+        message: 'Network error. Please check your connection and try again.'
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 dark:from-green-950 dark:to-blue-950">
       {/* Header */}
@@ -66,39 +146,106 @@ export default function ContactPage() {
                 <CardDescription>Fill out the form below and we'll get back to you within 24 hours.</CardDescription>
               </CardHeader>
               <CardContent>
-                <form className="space-y-6">
+                {submitStatus.type && (
+                  <Alert className={`mb-6 ${submitStatus.type === 'success' ? 'border-green-500 bg-green-50' : 'border-red-500 bg-red-50'}`}>
+                    {submitStatus.type === 'success' ? (
+                      <CheckCircle className="h-4 w-4 text-green-600" />
+                    ) : (
+                      <AlertCircle className="h-4 w-4 text-red-600" />
+                    )}
+                    <AlertDescription className={submitStatus.type === 'success' ? 'text-green-800' : 'text-red-800'}>
+                      {submitStatus.message}
+                    </AlertDescription>
+                  </Alert>
+                )}
+                
+                <form onSubmit={handleSubmit} className="space-y-6">
                   <div className="grid md:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="firstName">First Name</Label>
-                      <Input id="firstName" placeholder="John" />
+                      <Label htmlFor="firstName">First Name *</Label>
+                      <Input 
+                        id="firstName" 
+                        placeholder="John" 
+                        value={formData.firstName}
+                        onChange={(e) => handleInputChange('firstName', e.target.value)}
+                        required
+                      />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="lastName">Last Name</Label>
-                      <Input id="lastName" placeholder="Doe" />
+                      <Label htmlFor="lastName">Last Name *</Label>
+                      <Input 
+                        id="lastName" 
+                        placeholder="Doe" 
+                        value={formData.lastName}
+                        onChange={(e) => handleInputChange('lastName', e.target.value)}
+                        required
+                      />
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="email">Email</Label>
-                    <Input id="email" type="email" placeholder="john@example.com" />
+                    <Label htmlFor="email">Email *</Label>
+                    <Input 
+                      id="email" 
+                      type="email" 
+                      placeholder="john@example.com" 
+                      value={formData.email}
+                      onChange={(e) => handleInputChange('email', e.target.value)}
+                      required
+                    />
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="phone">Phone (Optional)</Label>
+                      <Input 
+                        id="phone" 
+                        type="tel"
+                        placeholder="+1 (555) 123-4567" 
+                        value={formData.phone}
+                        onChange={(e) => handleInputChange('phone', e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="company">Company (Optional)</Label>
+                      <Input 
+                        id="company" 
+                        placeholder="Your Company" 
+                        value={formData.company}
+                        onChange={(e) => handleInputChange('company', e.target.value)}
+                      />
+                    </div>
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="subject">Subject</Label>
-                    <Input id="subject" placeholder="How can we help you?" />
+                    <Label htmlFor="subject">Subject *</Label>
+                    <Input 
+                      id="subject" 
+                      placeholder="How can we help you?" 
+                      value={formData.subject}
+                      onChange={(e) => handleInputChange('subject', e.target.value)}
+                      required
+                    />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="message">Message</Label>
+                    <Label htmlFor="message">Message *</Label>
                     <Textarea
                       id="message"
                       placeholder="Tell us more about your question or feedback..."
                       className="min-h-[120px]"
+                      value={formData.message}
+                      onChange={(e) => handleInputChange('message', e.target.value)}
+                      required
                     />
                   </div>
 
-                  <Button type="submit" className="w-full bg-green-600 hover:bg-green-700">
-                    Send Message
+                  <Button 
+                    type="submit" 
+                    className="w-full bg-green-600 hover:bg-green-700"
+                    disabled={isSubmitting}
+                  >
+                    {isSubmitting ? "Sending..." : "Send Message"}
                   </Button>
                 </form>
               </CardContent>

@@ -1,12 +1,33 @@
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
+import { groq } from "@ai-sdk/groq";
+import { streamText } from "ai";
+
+// In-memory session storage (for development - use database in production)
+const chatSessions = new Map<string, Array<{ role: string; content: string }>>()
 
 export async function POST(request: Request) {
   try {
-    const { message } = await request.json()
+    const { message, sessionId = "default" } = await request.json()
 
-    const { text } = await generateText({
-      model: groq("llama-3.1-70b-versatile"),
+    // Get or create session history
+    if (!chatSessions.has(sessionId)) {
+      chatSessions.set(sessionId, [])
+    }
+    
+    const history = chatSessions.get(sessionId)!
+
+    // Add user message to history
+    history.push({ role: "user", content: message })
+
+    // Keep only last 10 messages to avoid token limits
+    const recentHistory = history.slice(-10)
+
+    // Build conversation context
+    const conversationContext = recentHistory
+      .map((msg) => `${msg.role === "user" ? "User" : "EcoBot"}: ${msg.content}`)
+      .join("\n\n")
+
+    const result = await streamText({
+      model: groq("llama-3.3-70b-versatile"),
       prompt: `You are EcoBot, an AI assistant specialized in environmental sustainability and eco-friendly living. 
       
       Your role is to provide helpful, accurate, and actionable advice on:
@@ -19,14 +40,27 @@ export async function POST(request: Request) {
       - Climate change awareness
       - Green technology
       
-      Always be encouraging, informative, and practical in your responses. Provide specific tips and actionable advice when possible.
+      IMPORTANT: Keep your responses CONCISE and BRIEF (2-4 sentences maximum). Be direct and actionable. Avoid long explanations unless specifically asked.
       
-      User question: ${message}`,
+      Previous conversation:
+      ${conversationContext}
+      
+      Please provide a helpful, BRIEF response to the user's latest message.`,
+      temperature: 0.7,
+      onFinish: async ({ text }) => {
+        // Add assistant response to history after streaming completes
+        history.push({ role: "assistant", content: text })
+      },
     })
 
-    return Response.json({ response: text })
+    return result.toTextStreamResponse({
+      headers: {
+        "X-Session-Id": sessionId,
+      },
+    })
   } catch (error) {
     console.error("Chat API error:", error)
     return Response.json({ error: "Failed to generate response" }, { status: 500 })
   }
 }
+
