@@ -1,7 +1,9 @@
 import type { NextAuthOptions } from "next-auth"
 import NextAuth from "next-auth"
 import CredentialsProvider from "next-auth/providers/credentials"
+import { BACKEND_URL } from '@/lib/config';
 
+// Use BACKEND_URL instead of process.env.NEXT_PUBLIC_BACKEND_URL
 // NextAuth configuration with credentials provider only
 const providers: NextAuthOptions['providers'] = [
   CredentialsProvider({
