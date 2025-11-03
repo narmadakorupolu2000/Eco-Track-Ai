@@ -19,7 +19,7 @@ interface AuthContextType {
   isLoading: boolean
 }
 
-const API_BASE_URL = 'http://localhost:8000'
+const API_BASE_URL = 'https://eco-track-ai.onrender.com'
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
