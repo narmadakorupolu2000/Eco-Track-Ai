@@ -13,8 +13,8 @@
     "docker:logs": "docker-compose logs -f",
     "docker:restart": "docker-compose restart",
     "backend:dev": "cd backend && uvicorn main:app --reload --host 0.0.0.0 --port 8000",
-    "test:backend": "curl http://localhost:8000/health",
-    "test:all": "npm run test:backend && curl http://localhost:3000"
+    "test:backend": "curl https://eco-track-ai.onrender.com/health",
+    "test:all": "npm run test:backend && curl https://eco-track-ai.onrender.com"
   },
   "dependencies": {
     "@ai-sdk/groq": "latest",
