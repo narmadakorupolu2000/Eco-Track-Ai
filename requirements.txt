@@ -1,93 +1,41 @@
-# Frontend Requirements (Node.js/npm)
-# Install with: npm install
+# Backend Requirements (Python)
+# Install with: pip install -r backend-requirements.txt
 
 ## Core Framework
-next@^14.2.32
-react@^18
-react-dom@^18
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
 
-## UI Components & Styling
-@radix-ui/react-accordion@1.2.2
-@radix-ui/react-alert-dialog@1.1.4
-@radix-ui/react-aspect-ratio@1.1.1
-@radix-ui/react-avatar@1.1.2
-@radix-ui/react-checkbox@latest
-@radix-ui/react-collapsible@1.1.2
-@radix-ui/react-context-menu@2.2.4
-@radix-ui/react-dialog@1.1.4
-@radix-ui/react-dropdown-menu@2.1.4
-@radix-ui/react-hover-card@1.1.4
-@radix-ui/react-label@latest
-@radix-ui/react-menubar@1.1.4
-@radix-ui/react-navigation-menu@1.2.3
-@radix-ui/react-popover@1.1.4
-@radix-ui/react-progress@latest
-@radix-ui/react-radio-group@1.2.2
-@radix-ui/react-scroll-area@latest
-@radix-ui/react-select@latest
-@radix-ui/react-separator@1.1.1
-@radix-ui/react-slider@1.2.2
-@radix-ui/react-slot@latest
-@radix-ui/react-switch@1.1.2
-@radix-ui/react-tabs@latest
-@radix-ui/react-toast@1.2.4
-@radix-ui/react-toggle@1.1.1
-@radix-ui/react-toggle-group@1.1.1
-@radix-ui/react-tooltip@1.1.6
+## Database
+motor==3.3.2
+pymongo>=4.15.3
 
-## Styling & Theming
-tailwindcss@^4.1.9
-tailwindcss-animate@^1.0.7
-tailwind-merge@^2.5.5
-autoprefixer@^10.4.20
-@tailwindcss/postcss@^4.1.9
-postcss@^8.5
-next-themes@latest
-class-variance-authority@^0.7.1
-clsx@^2.1.1
+## Authentication & Security
+bcrypt==4.0.1
+python-jose[cryptography]==3.3.0
+PyJWT==2.8.0
+cryptography==41.0.3
 
-## AI & Chat
-ai@latest
-@ai-sdk/groq@latest
+## Data Validation
+pydantic==2.5.0
+email-validator==2.1.0
 
-## Authentication
-next-auth@^4.24.11
-@auth/core@^0.34.2
+## HTTP & API
+python-multipart==0.0.6
+requests==2.31.0
 
-## Forms & Validation
-react-hook-form@^7.60.0
-@hookform/resolvers@^3.10.0
-zod@^4.1.9
+## Environment Variables
+python-dotenv==1.0.0
 
-## Charts & Visualization
-recharts@2.15.4
-
-## Utilities
-lucide-react@^0.454.0
-cmdk@1.0.4
-date-fns@4.1.0
-embla-carousel-react@8.5.1
-input-otp@1.4.1
-react-day-picker@9.8.0
-react-resizable-panels@^2.1.7
-sonner@^1.7.4
-vaul@^0.9.9
-geist@latest
-
-## Analytics
-@vercel/analytics@latest
-
-## Dev Dependencies
-typescript@^5
-@types/node@^22
-@types/react@^18
-@types/react-dom@^18
-@netlify/plugin-nextjs@^5.13.2
-tw-animate-css@1.3.3
+## AI Integration
+openai>=1.0.0
 
 ## Installation
-# npm install
-# or
-# pnpm install
-# or
-# yarn install
+# Create virtual environment:
+# python -m venv venv
+#
+# Activate virtual environment:
+# Windows: venv\Scripts\activate
+# Mac/Linux: source venv/bin/activate
+#
+# Install dependencies:
+# pip install -r backend-requirements.txt
