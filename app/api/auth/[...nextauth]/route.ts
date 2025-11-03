@@ -17,7 +17,7 @@ const providers: NextAuthOptions['providers'] = [
 
       try {
         // Call your existing backend API for credentials login
-        const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'}/api/auth/token?email=${credentials.email}&password=${credentials.password}`, {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || 'https://eco-track-ai.onrender.com'}/api/auth/token?email=${credentials.email}&password=${credentials.password}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
