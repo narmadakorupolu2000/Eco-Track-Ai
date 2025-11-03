@@ -59,7 +59,7 @@ export default function DashboardPage() {
           return
         }
 
-        const response = await fetch('http://localhost:8000/api/user/dashboard', {
+        const response = await fetch('https://eco-track-ai.onrender.com/api/user/dashboard', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
