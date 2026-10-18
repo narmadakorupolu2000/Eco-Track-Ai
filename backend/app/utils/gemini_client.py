@@ -1,3 +1,4 @@
+# backend/app/utils/gemini_client.py
 import os
 import json
 import re
@@ -7,56 +8,66 @@ import requests
 from typing import Optional, Dict, Any, List
 import asyncio
 
-# Do not log or expose GEMINI_API_KEY
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 CLOUDINARY_URL = os.getenv("CLOUDINARY_URL", "").strip()
 
-# Lazy import helper for the Gemini SDK.
-_genai = None
-def _ensure_genai():
+# Lazy import holder for possible SDK modules
+_genai_module = None
+
+def _import_genai_module():
     """
-    Try to locate a Google Gemini / Generative AI SDK under common package names.
-    If not present, raise a RuntimeError with actionable instructions.
+    Try common import styles for the Gemini/Google GenAI SDK.
+    Returns the imported module object.
     """
-    global _genai
-    if _genai is not None:
-        return _genai
+    global _genai_module
+    if _genai_module is not None:
+        return _genai_module
 
-    # Try a few common import styles that different SDK versions expose.
-    # We prefer 'from google import genai' as used in many examples.
-    try:
-        # Example modern import used in many docs: from google import genai
-        from google import genai  # type: ignore
-        _genai = genai
-        return _genai
-    except Exception:
-        pass
+    # Try a few common import names/locations
+    tried = []
+    candidates = [
+        ("google", "genai"),        # from google import genai
+        (None, "genai"),            # import genai
+        (None, "google.generativeai"),  # import google.generativeai as genai
+        (None, "google_genai"),     # alternative
+    ]
+    for pkg_parent, pkg_name in candidates:
+        try:
+            if pkg_parent:
+                # from google import genai
+                m_parent = __import__(pkg_parent, fromlist=[pkg_name])
+                mod = getattr(m_parent, pkg_name, None)
+                if mod is None:
+                    # fallback to nested import
+                    full = f"{pkg_parent}.{pkg_name}"
+                    mod = __import__(full, fromlist=[pkg_name])
+                if mod:
+                    _genai_module = mod
+                    return _genai_module
+            else:
+                mod = __import__(pkg_name)
+                _genai_module = mod
+                return _genai_module
+        except Exception as e:
+            tried.append((pkg_name, str(e)))
+            continue
 
-    try:
-        # Fallback: some packages expose a module like google.generativeai
-        import google.generativeai as genai  # type: ignore
-        _genai = genai
-        return _genai
-    except Exception:
-        pass
-
-    # Not found — raise a helpful error for the operator
-    # Provide both common pip commands (package naming varies)
+    # Not found — raise helpful message
     msg_lines = [
         "Gemini client SDK not found (needed for AI generation/classification).",
         "",
-        "To enable Gemini features, install the official SDK in the runtime environment.",
+        "Tried common import names and failed. Install the official SDK in the runtime environment.",
         "Common install commands to try (pick one):",
-        "  pip install google-generative-ai",
         "  pip install google-genai",
+        "  pip install google-generative-ai",
         "",
-        "Notes:",
-        "- Ensure your Python version is compatible with the SDK (use Python 3.10+ if possible).",
-        "- If you're building inside Docker, add the chosen pip command to your Dockerfile or backend requirements.",
-        "- If the package is hosted on a private index, provide --extra-index-url accordingly.",
+        "If you're inside Docker ensure the base Python version (3.10/3.11) is compatible and",
+        "that the pip install step succeeded during build.",
         "",
-        "After installing, restart the application.",
+        "Import attempts (name, error):",
     ]
+    for name, err in tried:
+        msg_lines.append(f"  - {name}: {err}")
     raise RuntimeError("\n".join(msg_lines))
 
 
@@ -88,69 +99,198 @@ def upload_to_cloudinary(file_bytes: bytes, filename: str, mime: str = "image/jp
     return j.get("secure_url")
 
 
+def _extract_text_from_interaction(interaction: Any) -> str:
+    """
+    Robustly extract assistant text from different possible interaction/response shapes.
+    """
+    # Try attributes that some SDKs provide
+    # 1) steps[-1].output or steps[-1].content
+    try:
+        steps = getattr(interaction, "steps", None)
+        if steps:
+            last = steps[-1]
+            # last may have 'output' or 'content'
+            out = getattr(last, "output", None) or getattr(last, "content", None)
+            if out:
+                if isinstance(out, str):
+                    return out
+                if isinstance(out, dict):
+                    # try content list
+                    content = out.get("content") or out.get("text") or out.get("message") or out
+                    if isinstance(content, list):
+                        pieces = []
+                        for block in content:
+                            if isinstance(block, dict):
+                                # block might be {'type':'output_text','text':'...'}
+                                text = block.get("text") or block.get("content") or block.get("message")
+                                if text:
+                                    pieces.append(text)
+                            elif isinstance(block, str):
+                                pieces.append(block)
+                        if pieces:
+                            return "\n".join(pieces)
+                    elif isinstance(content, str):
+                        return content
+                # fallback to string
+                return str(out)
+    except Exception:
+        pass
+
+    # 2) interaction.output
+    try:
+        out = getattr(interaction, "output", None)
+        if out:
+            if isinstance(out, str):
+                return out
+            if isinstance(out, dict):
+                # see if content list present
+                content = out.get("content") or out.get("text") or out
+                if isinstance(content, list):
+                    pieces = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            pieces.append(block.get("text") or "")
+                        elif isinstance(block, str):
+                            pieces.append(block)
+                    return "\n".join([p for p in pieces if p])
+                return str(content)
+    except Exception:
+        pass
+
+    # 3) interaction.messages (list of dicts)
+    try:
+        msgs = getattr(interaction, "messages", None) or getattr(interaction, "choices", None)
+        if msgs and isinstance(msgs, (list, tuple)):
+            # Find assistant/system role messages
+            for m in msgs[::-1]:
+                if isinstance(m, dict):
+                    text = m.get("content") or m.get("text") or m.get("message")
+                    if isinstance(text, str) and text.strip():
+                        return text
+                    # content might be list
+                    content = m.get("content")
+                    if isinstance(content, list):
+                        pieces = []
+                        for block in content:
+                            if isinstance(block, dict):
+                                pieces.append(block.get("text") or "")
+                            elif isinstance(block, str):
+                                pieces.append(block)
+                        if pieces:
+                            return "\n".join([p for p in pieces if p])
+    except Exception:
+        pass
+
+    # 4) Fallback to string conversion
+    try:
+        s = str(interaction)
+        # try to extract text blocks ignoring JSON noise
+        if s:
+            return s
+    except Exception:
+        pass
+
+    return ""
+
+
 async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
     """
-    Generate text from Gemini. Returns plain text.
-    This function is async so tests and callers can await it and mocks can use AsyncMock.
+    Generate text from Gemini. Async wrapper that tries several SDK call shapes.
+    Returns assistant text on success; raises RuntimeError on failure.
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not configured")
 
-    # Ensure SDK is available
-    genai = _ensure_genai()
+    genai = _import_genai_module()
 
-    # create client
-    # Some SDKs expose Client as genai.Client, others may have different factory functions.
+    # Try to create a client if SDK exposes a Client class
+    client_candidates = []
+    client = None
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        ClientClass = getattr(genai, "Client", None)
+        if ClientClass:
+            try:
+                client = ClientClass(api_key=GEMINI_API_KEY)
+                client_candidates.append(("genai.Client(api_key=...)", client))
+            except Exception:
+                # some SDK variants may require configure-style usage
+                try:
+                    genai.configure = getattr(genai, "configure", None)
+                    if genai.configure:
+                        genai.configure(api_key=GEMINI_API_KEY)
+                        client = genai
+                        client_candidates.append(("genai (configured module)", client))
+                except Exception:
+                    client = None
     except Exception:
-        # If Client constructor fails, try older or alternate call styles
-        try:
-            client = genai
-        except Exception as e:
-            raise RuntimeError(f"Failed to construct Gemini client: {e}")
+        client = None
 
-    # Choose a text-capable model; may need adjustment for your SDK / account
-    model = "models/gemini-1.0"
+    # If we don't have a constructed client, fall back to using the module itself
+    if client is None:
+        client = genai
+        client_candidates.append(("genai module (no client instance)", client))
 
+    # Define a sync function that attempts multiple invocation styles
     def _call_sync():
+        # Try several common SDK invocation patterns in order
+        last_err = []
+        # Pattern A: client.interactions.create(...)
         try:
-            interaction = client.interactions.create(
-                model=model,
-                input=prompt,
-                generation_config={"max_output_tokens": max_output_tokens}
-            )
-
-            # Extract text from the response robustly
-            text = None
-            if hasattr(interaction, "steps") and interaction.steps:
-                last = interaction.steps[-1]
-                text = getattr(last, "output", None) or str(last)
-            elif hasattr(interaction, "output") and interaction.output:
-                out = interaction.output
-                if isinstance(out, str):
-                    text = out
-                elif isinstance(out, dict) and "content" in out:
-                    content = out.get("content")
-                    if isinstance(content, list):
-                        pieces = []
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                pieces.append(block.get("text", ""))
-                            elif isinstance(block, str):
-                                pieces.append(block)
-                        text = "\n".join(pieces).strip()
-                    else:
-                        text = str(content)
-            if not text:
-                text = str(interaction)
-            return text
+            inter = getattr(client, "interactions", None)
+            if inter and hasattr(inter, "create"):
+                interaction = inter.create(model="models/gemini-1.0", input=prompt, generation_config={"max_output_tokens": max_output_tokens})
+                return _extract_text_from_interaction(interaction)
         except Exception as e:
-            raise
+            last_err.append(("client.interactions.create", str(e)))
+
+        # Pattern B: client.chat.completions.create(...) (older chat API shape)
+        try:
+            chat = getattr(client, "chat", None)
+            if chat and hasattr(chat, "completions") and hasattr(chat.completions, "create"):
+                interaction = chat.completions.create(model="models/gemini-1.0", messages=[{"role":"user","content":prompt}], max_tokens=max_output_tokens)
+                return _extract_text_from_interaction(interaction)
+        except Exception as e:
+            last_err.append(("client.chat.completions.create", str(e)))
+
+        # Pattern C: client.models.generate(...)
+        try:
+            models = getattr(client, "models", None)
+            if models and hasattr(models, "generate"):
+                # some SDKs expect input as {"text":"..."} or messages
+                interaction = models.generate(model="models/gemini-1.0", input=prompt, max_output_tokens=max_output_tokens)
+                return _extract_text_from_interaction(interaction)
+        except Exception as e:
+            last_err.append(("client.models.generate", str(e)))
+
+        # Pattern D: genai.generate or client.generate
+        try:
+            genai_generate = getattr(client, "generate", None) or getattr(genai, "generate", None)
+            if genai_generate and callable(genai_generate):
+                interaction = genai_generate(model="models/gemini-1.0", input=prompt, max_output_tokens=max_output_tokens)
+                return _extract_text_from_interaction(interaction)
+        except Exception as e:
+            last_err.append(("genai.generate/client.generate", str(e)))
+
+        # Pattern E: older SDKs that expose text.generate or similar
+        try:
+            text_api = getattr(client, "text", None)
+            if text_api and hasattr(text_api, "generate"):
+                interaction = text_api.generate(model="models/gemini-1.0", prompt=prompt, max_tokens=max_output_tokens)
+                return _extract_text_from_interaction(interaction)
+        except Exception as e:
+            last_err.append(("client.text.generate", str(e)))
+
+        # If we reach here, none of the patterns worked
+        err_msg = "None of the supported Gemini SDK call patterns were found or all failed. Attempts:\n"
+        for name, err in last_err:
+            err_msg += f" - {name}: {err}\n"
+        raise RuntimeError(err_msg)
 
     try:
         loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, _call_sync)
+        if not text:
+            raise RuntimeError("Gemini returned empty response")
         return text
     except Exception as e:
         raise RuntimeError(f"Text generation error: {e}")
@@ -165,14 +305,25 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not configured")
 
-    genai = _ensure_genai()
+    genai = _import_genai_module()
 
+    # Try client creation similar to generate_text
+    client = None
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        ClientClass = getattr(genai, "Client", None)
+        if ClientClass:
+            try:
+                client = ClientClass(api_key=GEMINI_API_KEY)
+            except Exception:
+                try:
+                    genai.configure(api_key=GEMINI_API_KEY)
+                    client = genai
+                except Exception:
+                    client = None
     except Exception:
-        client = genai  # fallback; tests often monkeypatch gemini_client.classify_image directly
-
-    model = "models/gemini-1.0"
+        client = None
+    if client is None:
+        client = genai
 
     instruction = (
         "You are given an image URL showing a single item of waste. Analyze the image and return ONLY valid JSON (no surrounding text). "
@@ -187,66 +338,110 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
     )
 
     def _call_sync():
+        last_err = []
+        # Try interactions.create
         try:
-            interaction = client.interactions.create(
-                model=model,
-                input=[
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                    {"type": "text", "text": instruction}
-                ],
-                generation_config={"max_output_tokens": 1024}
-            )
-
-            raw_text = ""
-            if hasattr(interaction, "steps") and interaction.steps:
-                last = interaction.steps[-1]
-                raw_text = getattr(last, "output", "") or str(last)
-            elif hasattr(interaction, "output"):
-                out = interaction.output
-                if isinstance(out, str):
-                    raw_text = out
-                elif isinstance(out, dict) and "content" in out:
-                    content = out.get("content")
-                    if isinstance(content, list):
-                        pieces = []
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                pieces.append(block.get("text", ""))
-                            elif isinstance(block, str):
-                                pieces.append(block)
-                        raw_text = "\n".join(pieces).strip()
-                    else:
-                        raw_text = str(content)
-                else:
-                    raw_text = str(out)
-            else:
-                raw_text = str(interaction)
-
-            j = None
-            try:
-                j = json.loads(raw_text)
-            except Exception:
-                m = re.search(r"\{[\s\S]*\}", raw_text)
-                if m:
-                    try:
-                        j = json.loads(m.group(0))
-                    except Exception:
-                        j = None
-
-            if not j or not isinstance(j, dict):
-                raise RuntimeError("AI returned non-JSON or invalid JSON for image classification")
-
-            normalized = {
-                "category": j.get("category") or j.get("type") or j.get("classification") or "Unknown",
-                "confidence": float(j.get("confidence") or j.get("score") or 0.0),
-                "disposal": j.get("disposal") or j.get("recommendations") or "",
-                "tips": j.get("tips") or j.get("recommendations_list") or [],
-                "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
-                "points_earned": int(j.get("points_earned") or j.get("points") or 0),
-            }
-            return normalized
+            inter = getattr(client, "interactions", None)
+            if inter and hasattr(inter, "create"):
+                interaction = inter.create(
+                    model="models/gemini-1.0",
+                    input=[{"type":"image_url","image_url":{"url":image_url}}, {"type":"text","text":instruction}],
+                    generation_config={"max_output_tokens":1024}
+                )
+                raw = _extract_text_from_interaction(interaction)
+                j = None
+                try:
+                    j = json.loads(raw)
+                except Exception:
+                    m = re.search(r"\{[\s\S]*\}", raw)
+                    if m:
+                        try:
+                            j = json.loads(m.group(0))
+                        except Exception:
+                            j = None
+                if not j:
+                    raise RuntimeError("AI returned non-JSON or invalid JSON for image classification")
+                normalized = {
+                    "category": j.get("category") or j.get("type") or "Unknown",
+                    "confidence": float(j.get("confidence") or j.get("score") or 0.0),
+                    "disposal": j.get("disposal") or j.get("recommendations") or "",
+                    "tips": j.get("tips") or j.get("recommendations_list") or [],
+                    "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
+                    "points_earned": int(j.get("points_earned") or j.get("points") or 0),
+                }
+                return normalized
         except Exception as e:
-            raise
+            last_err.append(("client.interactions.create", str(e)))
+
+        # Try client.chat.completions.create with an image represented in messages if supported
+        try:
+            chat = getattr(client, "chat", None)
+            if chat and hasattr(chat, "completions") and hasattr(chat.completions, "create"):
+                messages = [
+                    {"role":"user","content":[{"type":"text","text":instruction},{"type":"image_url","image_url":{"url":image_url}}]}
+                ]
+                interaction = chat.completions.create(model="models/gemini-1.0", messages=messages, max_tokens=1024)
+                raw = _extract_text_from_interaction(interaction)
+                # same parsing as above
+                j = None
+                try:
+                    j = json.loads(raw)
+                except Exception:
+                    m = re.search(r"\{[\s\S]*\}", raw)
+                    if m:
+                        try:
+                            j = json.loads(m.group(0))
+                        except Exception:
+                            j = None
+                if not j:
+                    raise RuntimeError("AI returned non-JSON or invalid JSON for image classification")
+                normalized = {
+                    "category": j.get("category") or j.get("type") or "Unknown",
+                    "confidence": float(j.get("confidence") or j.get("score") or 0.0),
+                    "disposal": j.get("disposal") or j.get("recommendations") or "",
+                    "tips": j.get("tips") or j.get("recommendations_list") or [],
+                    "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
+                    "points_earned": int(j.get("points_earned") or j.get("points") or 0),
+                }
+                return normalized
+        except Exception as e:
+            last_err.append(("client.chat.completions.create", str(e)))
+
+        # Try models.generate
+        try:
+            models = getattr(client, "models", None)
+            if models and hasattr(models, "generate"):
+                interaction = models.generate(model="models/gemini-1.0", input=[{"type":"image_url","image_url":{"url":image_url}}, {"type":"text","text":instruction}], max_output_tokens=1024)
+                raw = _extract_text_from_interaction(interaction)
+                j = None
+                try:
+                    j = json.loads(raw)
+                except Exception:
+                    m = re.search(r"\{[\s\S]*\}", raw)
+                    if m:
+                        try:
+                            j = json.loads(m.group(0))
+                        except Exception:
+                            j = None
+                if not j:
+                    raise RuntimeError("AI returned non-JSON or invalid JSON for image classification")
+                normalized = {
+                    "category": j.get("category") or j.get("type") or "Unknown",
+                    "confidence": float(j.get("confidence") or j.get("score") or 0.0),
+                    "disposal": j.get("disposal") or j.get("recommendations") or "",
+                    "tips": j.get("tips") or j.get("recommendations_list") or [],
+                    "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
+                    "points_earned": int(j.get("points_earned") or j.get("points") or 0),
+                }
+                return normalized
+        except Exception as e:
+            last_err.append(("client.models.generate", str(e)))
+
+        # If none worked
+        err_msg = "None of the supported Gemini SDK call patterns were found or all failed. Attempts:\n"
+        for name, err in last_err:
+            err_msg += f" - {name}: {err}\n"
+        raise RuntimeError(err_msg)
 
     try:
         loop = asyncio.get_running_loop()
