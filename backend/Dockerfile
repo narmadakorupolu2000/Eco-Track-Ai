@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -16,11 +16,12 @@ ENV CARGO_TARGET_DIR=/tmp/cargo_target
 
 WORKDIR /backend
 
-# Copy requirements file first for caching
+# Copy requirements first for caching
 COPY backend-requirements.txt ./
 
-RUN pip install --upgrade pip
+RUN pip install --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r backend-requirements.txt
+RUN pip install --no-cache-dir google-genai
 
 # Copy the rest of the code
 COPY . .
