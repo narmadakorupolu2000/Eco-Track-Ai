@@ -37,6 +37,8 @@ from app.routers.chat import router as chat_router
 from app.routers.waste_classification import router as waste_classification_router
 from app.routers.debug_genai import router as debug_genai_router
 from app.routers.debug_genai_signature import router as debug_genai_signature_router
+from app.routers.debug_genai_signatures_full import router as debug_genai_signatures_full_router
+
 
 
 
@@ -64,6 +66,7 @@ app = FastAPI(
 )
 app.include_router(debug_genai_router)
 app.include_router(debug_genai_signature_router)
+app.include_router(debug_genai_signatures_full_router)
 # --- Middleware ---
 app.add_middleware(
     CORSMiddleware,
