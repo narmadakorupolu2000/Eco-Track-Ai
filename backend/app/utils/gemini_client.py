@@ -5,7 +5,7 @@ import re
 import time
 import hashlib
 import requests
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 import asyncio
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -82,96 +82,80 @@ def upload_to_cloudinary(file_bytes: bytes, filename: str, mime: str = "image/jp
 
 
 def _extract_text_from_response(resp: Any) -> str:
-    """
-    Try many common response shapes and return text content.
-    """
-    # Common patterns used by google-genai:
-    # - response.output -> list of output items with .content
-    # - response.output[0].content -> list of blocks with 'text'
-    # - response.output_text, response.text
-    # - response.message, response.choices, response.messages
     try:
-        # Try attribute 'output'
         out = getattr(resp, "output", None)
         if out:
-            # Many SDKs return an object with output list
             if isinstance(out, (list, tuple)) and len(out) > 0:
                 first = out[0]
-                # first may have .content or .text
-                content = getattr(first, "content", None) or first.get("content") if isinstance(first, dict) else None
+                # try .content
+                content = getattr(first, "content", None) or (first.get("content") if isinstance(first, dict) else None)
                 if content:
                     if isinstance(content, list):
                         pieces = []
                         for block in content:
                             if isinstance(block, dict):
                                 pieces.append(block.get("text") or block.get("message") or "")
-                            elif hasattr(block, "text"):
-                                pieces.append(getattr(block, "text", ""))
                             elif isinstance(block, str):
                                 pieces.append(block)
                         if pieces:
                             return "\n".join([p for p in pieces if p])
                     elif isinstance(content, str):
                         return content
-                # fallback: first as string
                 return str(first)
             elif isinstance(out, dict):
-                # maybe out['content']
-                content = out.get("content", None)
+                content = out.get("content") or out.get("text") or out
                 if isinstance(content, list):
                     pieces = []
-                    for block in content:
-                        if isinstance(block, dict):
-                            pieces.append(block.get("text") or "")
-                        elif isinstance(block, str):
-                            pieces.append(block)
+                    for b in content:
+                        if isinstance(b, dict):
+                            pieces.append(b.get("text") or "")
+                        elif isinstance(b, str):
+                            pieces.append(b)
                     if pieces:
                         return "\n".join([p for p in pieces if p])
-                return str(out)
+                return str(content)
     except Exception:
         pass
 
-    try:
-        # output_text / text
-        for attr in ("output_text", "text", "response", "result"):
+    for attr in ("output_text", "text", "response", "result"):
+        try:
             if hasattr(resp, attr):
                 val = getattr(resp, attr)
                 if isinstance(val, str) and val.strip():
                     return val
                 if isinstance(val, dict):
-                    # look for nested text
                     for k in ("content", "text"):
                         if k in val and isinstance(val[k], str) and val[k].strip():
                             return val[k]
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     try:
-        # messages / choices / content
-        if hasattr(resp, "messages"):
-            msgs = getattr(resp, "messages")
-            if isinstance(msgs, (list, tuple)) and msgs:
-                for m in reversed(msgs):
-                    if isinstance(m, dict):
-                        t = m.get("content") or m.get("text") or m.get("message")
-                        if isinstance(t, str) and t.strip():
-                            return t
-        if hasattr(resp, "choices"):
-            choices = getattr(resp, "choices")
-            if isinstance(choices, (list, tuple)) and choices:
-                c = choices[0]
-                if isinstance(c, dict):
-                    t = c.get("message") or c.get("text") or c.get("output")
+        msgs = getattr(resp, "messages", None) or getattr(resp, "choices", None)
+        if msgs and isinstance(msgs, (list, tuple)):
+            for m in reversed(msgs):
+                if isinstance(m, dict):
+                    t = m.get("content") or m.get("text") or m.get("message")
                     if isinstance(t, str) and t.strip():
                         return t
+                    content = m.get("content")
+                    if isinstance(content, list):
+                        pieces = []
+                        for block in content:
+                            if isinstance(block, dict):
+                                pieces.append(block.get("text") or "")
+                            elif isinstance(block, str):
+                                pieces.append(block)
+                        if pieces:
+                            return "\n".join([p for p in pieces if p])
     except Exception:
         pass
 
     try:
-        # Fallback to JSON/text representation
-        s = json.dumps(resp.__dict__) if hasattr(resp, "__dict__") else str(resp)
-        if s and s.strip():
-            return s
+        if hasattr(resp, "__dict__"):
+            s = json.dumps({k: (str(v) if not isinstance(v, (dict, list)) else v) for k, v in resp.__dict__.items()})
+            if s and s.strip():
+                return s
     except Exception:
         pass
 
@@ -185,13 +169,30 @@ def _extract_text_from_response(resp: Any) -> str:
     return ""
 
 
+def _try_call_with_variants(func, variants: List[Dict[str, Any]]) -> Tuple[Any, List[Tuple[str, str]]]:
+    """
+    Attempt calling func with a list of kwargs variants. Return (result, []) on success,
+    or (None, list_of_errors) on failure where each error is (variant_desc, error_str).
+    """
+    errors = []
+    for v in variants:
+        try:
+            res = func(**v)
+            return res, []
+        except TypeError as e:
+            errors.append((str(v.keys()), f"TypeError: {e}"))
+        except Exception as e:
+            errors.append((str(v.keys()), f"{type(e).__name__}: {e}"))
+    return None, errors
+
+
 async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not configured")
 
     genai = _import_genai_module()
 
-    # Construct a client if possible
+    # Build client
     client = None
     try:
         ClientCls = getattr(genai, "Client", None)
@@ -199,7 +200,6 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
             try:
                 client = ClientCls(api_key=GEMINI_API_KEY)
             except Exception:
-                # fall back to module-level configure if present
                 cfg = getattr(genai, "configure", None)
                 if callable(cfg):
                     try:
@@ -218,7 +218,7 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
     def _call_sync():
         attempts = []
 
-        # 1) Try client.generate(...)
+        # 1) client.generate(...)
         try:
             gen = getattr(client, "generate", None)
             if callable(gen):
@@ -232,7 +232,7 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
         except Exception as e:
             attempts.append(("client.generate", str(e)))
 
-        # 2) Try client.models.generate(...)
+        # 2) client.models.generate(...)
         try:
             models = getattr(client, "models", None)
             if models and hasattr(models, "generate"):
@@ -246,35 +246,49 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
         except Exception as e:
             attempts.append(("client.models.generate", str(e)))
 
-        # 3) Try client.chats.create(...) (chat-style)
+        # 3) client.chats.create(...) with variants
         try:
             chats = getattr(client, "chats", None)
             if chats and hasattr(chats, "create"):
-                try:
-                    resp = chats.create(model=model_name, messages=[{"role": "user", "content": prompt}], max_output_tokens=max_output_tokens)
-                except TypeError:
-                    resp = chats.create(model=model_name, messages=[{"role": "user", "content": prompt}])
-                text = _extract_text_from_response(resp)
-                if text:
-                    return text
+                variants = [
+                    {"model": model_name, "input": prompt, "max_output_tokens": max_output_tokens},
+                    {"model": model_name, "input": [{"role": "user", "content": prompt}], "max_output_tokens": max_output_tokens},
+                    {"model": model_name, "input": {"messages":[{"role":"user","content":prompt}]}, "max_output_tokens": max_output_tokens},
+                    {"model": model_name, "prompt": prompt, "max_output_tokens": max_output_tokens},
+                    {"model": model_name, "text": prompt, "max_output_tokens": max_output_tokens},
+                ]
+                resp, errs = _try_call_with_variants(chats.create, variants)
+                if resp is not None:
+                    text = _extract_text_from_response(resp)
+                    if text:
+                        return text
+                else:
+                    for e in errs:
+                        attempts.append((f"client.chats.create{e[0]}", e[1]))
         except Exception as e:
-            attempts.append(("client.chats.create", str(e)))
+            attempts.append(("client.chats.create_outer", str(e)))
 
-        # 4) Try client.responses.create(...) (responses API)
+        # 4) client.responses.create(...) with variants
         try:
             responses = getattr(client, "responses", None)
             if responses and hasattr(responses, "create"):
-                try:
-                    resp = responses.create(model=model_name, input=prompt, max_output_tokens=max_output_tokens)
-                except TypeError:
-                    resp = responses.create(model=model_name, prompt=prompt, max_output_tokens=max_output_tokens)
-                text = _extract_text_from_response(resp)
-                if text:
-                    return text
+                variants = [
+                    {"model": model_name, "input": prompt, "max_output_tokens": max_output_tokens},
+                    {"model": model_name, "prompt": prompt, "max_output_tokens": max_output_tokens},
+                    {"model": model_name, "text": prompt, "max_output_tokens": max_output_tokens},
+                ]
+                resp, errs = _try_call_with_variants(responses.create, variants)
+                if resp is not None:
+                    text = _extract_text_from_response(resp)
+                    if text:
+                        return text
+                else:
+                    for e in errs:
+                        attempts.append((f"client.responses.create{e[0]}", e[1]))
         except Exception as e:
-            attempts.append(("client.responses.create", str(e)))
+            attempts.append(("client.responses.create_outer", str(e)))
 
-        # 5) Try module-level generate functions (genai.generate_text / genai.generate)
+        # 5) module-level genai.generate / genai.generate_text
         try:
             genfunc = getattr(genai, "generate", None) or getattr(genai, "generate_text", None)
             if callable(genfunc):
@@ -288,7 +302,7 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
         except Exception as e:
             attempts.append(("genai.generate", str(e)))
 
-        # If none succeeded, raise detailing attempts
+        # If all fail:
         msg = "None of the supported Gemini SDK call patterns worked. Attempts:\n"
         for name, err in attempts:
             msg += f" - {name}: {err}\n"
@@ -310,7 +324,6 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
 
     genai = _import_genai_module()
 
-    # Construct client
     client = None
     try:
         ClientCls = getattr(genai, "Client", None)
@@ -341,110 +354,124 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
     def _call_sync():
         attempts = []
 
-        # Approach A: structured multimodal via client.models.generate
+        # A: models.generate variants
         try:
             models = getattr(client, "models", None)
             if models and hasattr(models, "generate"):
-                # Try several input shapes
-                try:
-                    resp = models.generate(model=model_name, input=[{"type": "image_url", "image_url": {"url": image_url}}, {"type": "text", "text": instruction}], max_output_tokens=1024)
-                except TypeError:
+                variants = [
+                    {"model": model_name, "input": [{"type":"image_url","image_url":{"url":image_url}}, {"type":"text","text":instruction}], "max_output_tokens":1024},
+                    {"model": model_name, "prompt": instruction + "\nImage: " + image_url, "max_output_tokens":1024},
+                    {"model": model_name, "input": instruction + "\nImage: " + image_url, "max_output_tokens":1024},
+                ]
+                resp, errs = _try_call_with_variants(models.generate, variants)
+                if resp is not None:
+                    raw = _extract_text_from_response(resp)
+                    j = None
                     try:
-                        resp = models.generate(model=model_name, prompt=instruction + "\nImage: " + image_url, max_output_tokens=1024)
-                    except Exception as e:
-                        raise
-                raw = _extract_text_from_response(resp)
-                j = None
-                try:
-                    j = json.loads(raw)
-                except Exception:
-                    m = re.search(r"\{[\s\S]*\}", raw)
-                    if m:
-                        try:
-                            j = json.loads(m.group(0))
-                        except Exception:
-                            j = None
-                if not j or not isinstance(j, dict):
-                    raise RuntimeError("AI returned non-JSON for image classification")
-                normalized = {
-                    "category": j.get("category") or j.get("type") or "Unknown",
-                    "confidence": float(j.get("confidence") or j.get("score") or 0.0),
-                    "disposal": j.get("disposal") or j.get("recommendations") or "",
-                    "tips": j.get("tips") or j.get("recommendations_list") or [],
-                    "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
-                    "points_earned": int(j.get("points_earned") or j.get("points") or 0),
-                }
-                return normalized
+                        j = json.loads(raw)
+                    except Exception:
+                        m = re.search(r"\{[\s\S]*\}", raw)
+                        if m:
+                            try:
+                                j = json.loads(m.group(0))
+                            except Exception:
+                                j = None
+                    if not j or not isinstance(j, dict):
+                        raise RuntimeError("AI returned non-JSON for image classification")
+                    normalized = {
+                        "category": j.get("category") or j.get("type") or "Unknown",
+                        "confidence": float(j.get("confidence") or j.get("score") or 0.0),
+                        "disposal": j.get("disposal") or j.get("recommendations") or "",
+                        "tips": j.get("tips") or j.get("recommendations_list") or [],
+                        "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
+                        "points_earned": int(j.get("points_earned") or j.get("points") or 0),
+                    }
+                    return normalized
+                else:
+                    for e in errs:
+                        attempts.append((f"models.generate{e[0]}", e[1]))
         except Exception as e:
-            attempts.append(("client.models.generate", str(e)))
+            attempts.append(("models.generate_outer", str(e)))
 
-        # Approach B: chat-style via client.chats.create
+        # B: chats.create variants
         try:
             chats = getattr(client, "chats", None)
             if chats and hasattr(chats, "create"):
-                try:
-                    resp = chats.create(model=model_name, messages=[{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image_url", "image_url": {"url": image_url}}]}], max_output_tokens=1024)
-                except TypeError:
-                    resp = chats.create(model=model_name, messages=[{"role": "user", "content": instruction + "\nImage: " + image_url}], max_output_tokens=1024)
-                raw = _extract_text_from_response(resp)
-                j = None
-                try:
-                    j = json.loads(raw)
-                except Exception:
-                    m = re.search(r"\{[\s\S]*\}", raw)
-                    if m:
-                        try:
-                            j = json.loads(m.group(0))
-                        except Exception:
-                            j = None
-                if not j or not isinstance(j, dict):
-                    raise RuntimeError("AI returned non-JSON for image classification (chat)")
-                normalized = {
-                    "category": j.get("category") or j.get("type") or "Unknown",
-                    "confidence": float(j.get("confidence") or j.get("score") or 0.0),
-                    "disposal": j.get("disposal") or j.get("recommendations") or "",
-                    "tips": j.get("tips") or j.get("recommendations_list") or [],
-                    "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
-                    "points_earned": int(j.get("points_earned") or j.get("points") or 0),
-                }
-                return normalized
+                variants = [
+                    {"model": model_name, "input": [{"role":"user","content": instruction}, {"type":"image_url","image_url":{"url":image_url}}], "max_output_tokens":1024},
+                    {"model": model_name, "input": [{"role":"user","content": instruction + "\nImage: " + image_url}], "max_output_tokens":1024},
+                    {"model": model_name, "prompt": instruction + "\nImage: " + image_url, "max_output_tokens":1024},
+                    {"model": model_name, "input": instruction + "\nImage: " + image_url, "max_output_tokens":1024},
+                ]
+                resp, errs = _try_call_with_variants(chats.create, variants)
+                if resp is not None:
+                    raw = _extract_text_from_response(resp)
+                    j = None
+                    try:
+                        j = json.loads(raw)
+                    except Exception:
+                        m = re.search(r"\{[\s\S]*\}", raw)
+                        if m:
+                            try:
+                                j = json.loads(m.group(0))
+                            except Exception:
+                                j = None
+                    if not j or not isinstance(j, dict):
+                        raise RuntimeError("AI returned non-JSON for image classification (chat)")
+                    normalized = {
+                        "category": j.get("category") or j.get("type") or "Unknown",
+                        "confidence": float(j.get("confidence") or j.get("score") or 0.0),
+                        "disposal": j.get("disposal") or j.get("recommendations") or "",
+                        "tips": j.get("tips") or j.get("recommendations_list") or [],
+                        "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
+                        "points_earned": int(j.get("points_earned") or j.get("points") or 0),
+                    }
+                    return normalized
+                else:
+                    for e in errs:
+                        attempts.append((f"chats.create{e[0]}", e[1]))
         except Exception as e:
-            attempts.append(("client.chats.create", str(e)))
+            attempts.append(("chats.create_outer", str(e)))
 
-        # Approach C: responses.create
+        # C: responses.create variants
         try:
             responses = getattr(client, "responses", None)
             if responses and hasattr(responses, "create"):
-                try:
-                    resp = responses.create(model=model_name, input=[{"type": "image_url", "image_url": {"url": image_url}}, {"type": "text", "text": instruction}], max_output_tokens=1024)
-                except TypeError:
-                    resp = responses.create(model=model_name, prompt=instruction + "\nImage: " + image_url, max_output_tokens=1024)
-                raw = _extract_text_from_response(resp)
-                j = None
-                try:
-                    j = json.loads(raw)
-                except Exception:
-                    m = re.search(r"\{[\s\S]*\}", raw)
-                    if m:
-                        try:
-                            j = json.loads(m.group(0))
-                        except Exception:
-                            j = None
-                if not j or not isinstance(j, dict):
-                    raise RuntimeError("AI returned non-JSON for image classification (responses)")
-                normalized = {
-                    "category": j.get("category") or j.get("type") or "Unknown",
-                    "confidence": float(j.get("confidence") or j.get("score") or 0.0),
-                    "disposal": j.get("disposal") or j.get("recommendations") or "",
-                    "tips": j.get("tips") or j.get("recommendations_list") or [],
-                    "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
-                    "points_earned": int(j.get("points_earned") or j.get("points") or 0),
-                }
-                return normalized
+                variants = [
+                    {"model": model_name, "input": [{"type":"image_url","image_url":{"url":image_url}}, {"type":"text","text":instruction}], "max_output_tokens":1024},
+                    {"model": model_name, "prompt": instruction + "\nImage: " + image_url, "max_output_tokens":1024},
+                ]
+                resp, errs = _try_call_with_variants(responses.create, variants)
+                if resp is not None:
+                    raw = _extract_text_from_response(resp)
+                    j = None
+                    try:
+                        j = json.loads(raw)
+                    except Exception:
+                        m = re.search(r"\{[\s\S]*\}", raw)
+                        if m:
+                            try:
+                                j = json.loads(m.group(0))
+                            except Exception:
+                                j = None
+                    if not j or not isinstance(j, dict):
+                        raise RuntimeError("AI returned non-JSON for image classification (responses)")
+                    normalized = {
+                        "category": j.get("category") or j.get("type") or "Unknown",
+                        "confidence": float(j.get("confidence") or j.get("score") or 0.0),
+                        "disposal": j.get("disposal") or j.get("recommendations") or "",
+                        "tips": j.get("tips") or j.get("recommendations_list") or [],
+                        "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
+                        "points_earned": int(j.get("points_earned") or j.get("points") or 0),
+                    }
+                    return normalized
+                else:
+                    for e in errs:
+                        attempts.append((f"responses.create{e[0]}", e[1]))
         except Exception as e:
-            attempts.append(("client.responses.create", str(e)))
+            attempts.append(("responses.create_outer", str(e)))
 
-        # Approach D: fallback text-based call (append image URL)
+        # D: fallback text generation with appended image URL
         try:
             genfunc = getattr(client, "generate", None) or getattr(genai, "generate", None) or getattr(client, "generate_text", None) or getattr(genai, "generate_text", None)
             if callable(genfunc):
@@ -465,7 +492,7 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
                         except Exception:
                             j = None
                 if not j or not isinstance(j, dict):
-                    raise RuntimeError("AI returned non-JSON for image classification (fallback text)")
+                    raise RuntimeError("AI returned non-JSON for image classification (fallback)")
                 normalized = {
                     "category": j.get("category") or j.get("type") or "Unknown",
                     "confidence": float(j.get("confidence") or j.get("score") or 0.0),
