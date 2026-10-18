@@ -33,6 +33,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from fastapi import Request
 from app.utils.perplexity_client import classify_image_with_perplexity, upload_to_cloudinary
+from app.routers.chat import router as chat_router
+from app.routers.waste_classification import router as waste_classification_router
+
+
 
 # --- Configuration ---
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
@@ -488,7 +492,8 @@ async def internal_classify(req: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ==================== Public Waste Classify Endpoint (Perplexity) ====================
-
+app.include_router(chat_router, prefix="/api")
+app.include_router(waste_classification_router, prefix="/api")
 @app.post("/api/waste-classify")
 async def api_waste_classify(request: Request, file: UploadFile | None = File(default=None)):
     """Public endpoint for the UI to classify waste using Perplexity.
