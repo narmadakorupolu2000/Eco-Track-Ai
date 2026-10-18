@@ -36,6 +36,8 @@ from app.utils.perplexity_client import classify_image_with_perplexity, upload_t
 from app.routers.chat import router as chat_router
 from app.routers.waste_classification import router as waste_classification_router
 from app.routers.debug_genai import router as debug_genai_router
+from app.routers.debug_genai_signature import router as debug_genai_signature_router
+
 
 
 
@@ -61,6 +63,7 @@ app = FastAPI(
     version="3.0.0"
 )
 app.include_router(debug_genai_router)
+app.include_router(debug_genai_signature_router)
 # --- Middleware ---
 app.add_middleware(
     CORSMiddleware,
