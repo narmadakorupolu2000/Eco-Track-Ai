@@ -28,8 +28,8 @@ requests==2.31.0
 python-dotenv==1.0.0
 
 ## AI Integration
-# Use the official Google Gemini / Generative AI SDK for Python
-google-generative-ai>=0.1.0
+# Official Google GenAI (Gemini) Python SDK
+google-genai>=0.1.0
 
 ## Installation
 # Create virtual environment:
