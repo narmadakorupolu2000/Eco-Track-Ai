@@ -9,7 +9,6 @@ uvicorn[standard]==0.24.0
 motor==3.4.0
 pymongo==4.6.1
 
-
 ## Authentication & Security
 bcrypt==4.0.1
 passlib[bcrypt]>=1.7.0
@@ -29,12 +28,7 @@ requests==2.31.0
 python-dotenv==1.0.0
 
 ## AI Integration
-# NOTE: Gemini SDK is not included here to avoid failing builds when a wheel is not available
-# Install the SDK manually in your environment if you need Gemini features:
-#   pip install google-generative-ai
-# or
-#   pip install google-genai
-# See gemini_client.py runtime message for guidance if import fails.
+google-genai>=1.0.0
 
 ## Installation
 # Create virtual environment:
