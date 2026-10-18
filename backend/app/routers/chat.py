@@ -1,19 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from app.routers.auth import get_current_user
-from app.models.schemas import User
-from typing import Optional, Dict, Any
+# backend/app/routers/chat.py
+from fastapi import APIRouter, HTTPException
+from typing import Dict, Any
 
 from app.utils.gemini_client import generate_text
 
 router = APIRouter()
 
 @router.post("/chat")
-async def chat_endpoint(payload: Dict[str, Any], current_user: User = Depends(get_current_user)):
+async def chat_endpoint(payload: Dict[str, Any]):
     """
     Chat endpoint that accepts JSON:
       { "message": "<user message>", "sessionId": "<optional session id>" }
     Returns:
       { "response": "<assistant text>" }
+
+    This endpoint is intentionally public (no Authorization required) so the frontend
+    can call it without a token. If you later wish to require auth, re-add the
+    dependency on get_current_user.
     """
     # preserve request/response contract: look for "message" key
     message = payload.get("message") if isinstance(payload, dict) else None
