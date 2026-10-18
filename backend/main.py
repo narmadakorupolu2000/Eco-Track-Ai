@@ -35,6 +35,7 @@ from fastapi import Request
 from app.utils.perplexity_client import classify_image_with_perplexity, upload_to_cloudinary
 from app.routers.chat import router as chat_router
 from app.routers.waste_classification import router as waste_classification_router
+from app.routers.debug_genai import router as debug_genai_router
 
 
 
@@ -59,7 +60,7 @@ app = FastAPI(
     description="Unified Backend API for EcoTrack - Environmental Tracking Application",
     version="3.0.0"
 )
-
+app.include_router(debug_genai_router)
 # --- Middleware ---
 app.add_middleware(
     CORSMiddleware,
