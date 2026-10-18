@@ -30,6 +30,7 @@ def _import_genai_module():
         (None, "genai"),            # import genai
         (None, "google.generativeai"),  # import google.generativeai as genai
         (None, "google_genai"),     # alternative
+        (None, "google"),           # fallback top-level google (inspect)
     ]
     for pkg_parent, pkg_name in candidates:
         try:
@@ -102,48 +103,45 @@ def upload_to_cloudinary(file_bytes: bytes, filename: str, mime: str = "image/jp
 def _extract_text_from_interaction(interaction: Any) -> str:
     """
     Robustly extract assistant text from different possible interaction/response shapes.
+    Handles:
+      - interaction.steps[-1].output / .content
+      - interaction.output
+      - interaction.messages / interaction.choices
+      - response.text / response.output_text / response.result / nested content lists
+      - fallback: str(interaction)
     """
-    # Try attributes that some SDKs provide
-    # 1) steps[-1].output or steps[-1].content
     try:
+        # steps[-1].output or steps[-1].content (some SDKs)
         steps = getattr(interaction, "steps", None)
         if steps:
             last = steps[-1]
-            # last may have 'output' or 'content'
-            out = getattr(last, "output", None) or getattr(last, "content", None)
+            out = getattr(last, "output", None) or getattr(last, "content", None) or last
             if out:
                 if isinstance(out, str):
                     return out
                 if isinstance(out, dict):
-                    # try content list
-                    content = out.get("content") or out.get("text") or out.get("message") or out
+                    content = out.get("content") or out.get("text") or out
                     if isinstance(content, list):
                         pieces = []
                         for block in content:
                             if isinstance(block, dict):
-                                # block might be {'type':'output_text','text':'...'}
-                                text = block.get("text") or block.get("content") or block.get("message")
-                                if text:
-                                    pieces.append(text)
+                                pieces.append(block.get("text") or block.get("message") or "")
                             elif isinstance(block, str):
                                 pieces.append(block)
-                        if pieces:
-                            return "\n".join(pieces)
-                    elif isinstance(content, str):
+                        return "\n".join([p for p in pieces if p])
+                    if isinstance(content, str):
                         return content
-                # fallback to string
                 return str(out)
     except Exception:
         pass
 
-    # 2) interaction.output
     try:
+        # interaction.output (some SDKs)
         out = getattr(interaction, "output", None)
         if out:
             if isinstance(out, str):
                 return out
             if isinstance(out, dict):
-                # see if content list present
                 content = out.get("content") or out.get("text") or out
                 if isinstance(content, list):
                     pieces = []
@@ -157,17 +155,16 @@ def _extract_text_from_interaction(interaction: Any) -> str:
     except Exception:
         pass
 
-    # 3) interaction.messages (list of dicts)
     try:
+        # interaction.messages or interaction.choices (list of dicts)
         msgs = getattr(interaction, "messages", None) or getattr(interaction, "choices", None)
         if msgs and isinstance(msgs, (list, tuple)):
-            # Find assistant/system role messages
-            for m in msgs[::-1]:
+            for m in reversed(msgs):
                 if isinstance(m, dict):
+                    # common keys
                     text = m.get("content") or m.get("text") or m.get("message")
                     if isinstance(text, str) and text.strip():
                         return text
-                    # content might be list
                     content = m.get("content")
                     if isinstance(content, list):
                         pieces = []
@@ -181,11 +178,41 @@ def _extract_text_from_interaction(interaction: Any) -> str:
     except Exception:
         pass
 
-    # 4) Fallback to string conversion
+    try:
+        # direct attributes like text, output_text, response, result, etc.
+        if hasattr(interaction, "text"):
+            t = getattr(interaction, "text")
+            if isinstance(t, str) and t.strip():
+                return t
+        if hasattr(interaction, "output_text"):
+            t = getattr(interaction, "output_text")
+            if isinstance(t, str) and t.strip():
+                return t
+        if hasattr(interaction, "response"):
+            t = getattr(interaction, "response")
+            if isinstance(t, str) and t.strip():
+                return t
+        if hasattr(interaction, "result"):
+            r = getattr(interaction, "result")
+            # result might be list or dict
+            if isinstance(r, list) and r:
+                first = r[0]
+                if isinstance(first, dict):
+                    # extract content/text
+                    text = first.get("content") or first.get("text") or first.get("output")
+                    if isinstance(text, str) and text.strip():
+                        return text
+            if isinstance(r, dict):
+                text = r.get("content") or r.get("text") or r.get("output")
+                if isinstance(text, str) and text.strip():
+                    return text
+    except Exception:
+        pass
+
+    # Fallback to string conversion
     try:
         s = str(interaction)
-        # try to extract text blocks ignoring JSON noise
-        if s:
+        if s and s.strip():
             return s
     except Exception:
         pass
@@ -204,37 +231,32 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
     genai = _import_genai_module()
 
     # Try to create a client if SDK exposes a Client class
-    client_candidates = []
     client = None
     try:
         ClientClass = getattr(genai, "Client", None)
         if ClientClass:
             try:
                 client = ClientClass(api_key=GEMINI_API_KEY)
-                client_candidates.append(("genai.Client(api_key=...)", client))
             except Exception:
-                # some SDK variants may require configure-style usage
+                # Some SDKs require configure on the module instead
                 try:
-                    genai.configure = getattr(genai, "configure", None)
-                    if genai.configure:
-                        genai.configure(api_key=GEMINI_API_KEY)
+                    configure = getattr(genai, "configure", None)
+                    if callable(configure):
+                        configure(api_key=GEMINI_API_KEY)
                         client = genai
-                        client_candidates.append(("genai (configured module)", client))
                 except Exception:
                     client = None
     except Exception:
         client = None
 
-    # If we don't have a constructed client, fall back to using the module itself
+    # If client is still None, use genai module directly
     if client is None:
         client = genai
-        client_candidates.append(("genai module (no client instance)", client))
 
-    # Define a sync function that attempts multiple invocation styles
     def _call_sync():
-        # Try several common SDK invocation patterns in order
         last_err = []
-        # Pattern A: client.interactions.create(...)
+
+        # Pattern 1: client.interactions.create(...)
         try:
             inter = getattr(client, "interactions", None)
             if inter and hasattr(inter, "create"):
@@ -243,7 +265,7 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
         except Exception as e:
             last_err.append(("client.interactions.create", str(e)))
 
-        # Pattern B: client.chat.completions.create(...) (older chat API shape)
+        # Pattern 2: client.chat.completions.create(...)
         try:
             chat = getattr(client, "chat", None)
             if chat and hasattr(chat, "completions") and hasattr(chat.completions, "create"):
@@ -252,17 +274,16 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
         except Exception as e:
             last_err.append(("client.chat.completions.create", str(e)))
 
-        # Pattern C: client.models.generate(...)
+        # Pattern 3: client.models.generate(...)
         try:
             models = getattr(client, "models", None)
             if models and hasattr(models, "generate"):
-                # some SDKs expect input as {"text":"..."} or messages
                 interaction = models.generate(model="models/gemini-1.0", input=prompt, max_output_tokens=max_output_tokens)
                 return _extract_text_from_interaction(interaction)
         except Exception as e:
             last_err.append(("client.models.generate", str(e)))
 
-        # Pattern D: genai.generate or client.generate
+        # Pattern 4: genai.generate or client.generate
         try:
             genai_generate = getattr(client, "generate", None) or getattr(genai, "generate", None)
             if genai_generate and callable(genai_generate):
@@ -271,7 +292,7 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
         except Exception as e:
             last_err.append(("genai.generate/client.generate", str(e)))
 
-        # Pattern E: older SDKs that expose text.generate or similar
+        # Pattern 5: client.text.generate(...)
         try:
             text_api = getattr(client, "text", None)
             if text_api and hasattr(text_api, "generate"):
@@ -279,6 +300,31 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
                 return _extract_text_from_interaction(interaction)
         except Exception as e:
             last_err.append(("client.text.generate", str(e)))
+
+        # Pattern 6: client.generate_text(...) or genai.generate_text(...)
+        try:
+            gen_text = getattr(client, "generate_text", None) or getattr(genai, "generate_text", None)
+            if gen_text and callable(gen_text):
+                # Some SDKs expect prompt kw name, others 'input' or 'messages'
+                try:
+                    interaction = gen_text(model="models/gemini-1.0", prompt=prompt, max_output_tokens=max_output_tokens)
+                except TypeError:
+                    # fallback to input=prompt
+                    interaction = gen_text(model="models/gemini-1.0", input=prompt, max_output_tokens=max_output_tokens)
+                return _extract_text_from_interaction(interaction)
+        except Exception as e:
+            last_err.append(("client.generate_text/genai.generate_text", str(e)))
+
+        # Pattern 7: try a simple textual call by concatenating and using a text-based generate
+        # as last resort: this may work on SDKs that only accept text prompts
+        try:
+            # Attempt to call a simple top-level call if present
+            simple = getattr(client, "simple_generate", None) or getattr(genai, "simple_generate", None)
+            if simple and callable(simple):
+                interaction = simple(prompt)
+                return _extract_text_from_interaction(interaction)
+        except Exception as e:
+            last_err.append(("simple_generate", str(e)))
 
         # If we reach here, none of the patterns worked
         err_msg = "None of the supported Gemini SDK call patterns were found or all failed. Attempts:\n"
@@ -316,8 +362,10 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
                 client = ClientClass(api_key=GEMINI_API_KEY)
             except Exception:
                 try:
-                    genai.configure(api_key=GEMINI_API_KEY)
-                    client = genai
+                    configure = getattr(genai, "configure", None)
+                    if callable(configure):
+                        configure(api_key=GEMINI_API_KEY)
+                        client = genai
                 except Exception:
                     client = None
     except Exception:
@@ -339,7 +387,7 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
 
     def _call_sync():
         last_err = []
-        # Try interactions.create
+        # Pattern A: interactions.create with structured image input
         try:
             inter = getattr(client, "interactions", None)
             if inter and hasattr(inter, "create"):
@@ -373,7 +421,7 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
         except Exception as e:
             last_err.append(("client.interactions.create", str(e)))
 
-        # Try client.chat.completions.create with an image represented in messages if supported
+        # Pattern B: chat.completions.create with image in messages
         try:
             chat = getattr(client, "chat", None)
             if chat and hasattr(chat, "completions") and hasattr(chat.completions, "create"):
@@ -382,7 +430,6 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
                 ]
                 interaction = chat.completions.create(model="models/gemini-1.0", messages=messages, max_tokens=1024)
                 raw = _extract_text_from_interaction(interaction)
-                # same parsing as above
                 j = None
                 try:
                     j = json.loads(raw)
@@ -407,7 +454,7 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
         except Exception as e:
             last_err.append(("client.chat.completions.create", str(e)))
 
-        # Try models.generate
+        # Pattern C: models.generate (structured)
         try:
             models = getattr(client, "models", None)
             if models and hasattr(models, "generate"):
@@ -436,6 +483,42 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
                 return normalized
         except Exception as e:
             last_err.append(("client.models.generate", str(e)))
+
+        # Pattern D (fallback): Some SDKs do not have structured multimodal APIs; append the image URL to the text instruction
+        try:
+            # Try client.generate_text, genai.generate_text, or client.generate as a text-only call including the image URL
+            gen_text = getattr(client, "generate_text", None) or getattr(genai, "generate_text", None) or getattr(client, "generate", None) or getattr(genai, "generate", None)
+            if gen_text and callable(gen_text):
+                prompt = instruction + "\nImage: " + image_url
+                try:
+                    interaction = gen_text(model="models/gemini-1.0", prompt=prompt, max_output_tokens=1024)
+                except TypeError:
+                    # Try input kw
+                    interaction = gen_text(model="models/gemini-1.0", input=prompt, max_output_tokens=1024)
+                raw = _extract_text_from_interaction(interaction)
+                j = None
+                try:
+                    j = json.loads(raw)
+                except Exception:
+                    m = re.search(r"\{[\s\S]*\}", raw)
+                    if m:
+                        try:
+                            j = json.loads(m.group(0))
+                        except Exception:
+                            j = None
+                if not j:
+                    raise RuntimeError("AI returned non-JSON or invalid JSON for image classification (fallback text-based)")
+                normalized = {
+                    "category": j.get("category") or j.get("type") or "Unknown",
+                    "confidence": float(j.get("confidence") or j.get("score") or 0.0),
+                    "disposal": j.get("disposal") or j.get("recommendations") or "",
+                    "tips": j.get("tips") or j.get("recommendations_list") or [],
+                    "environmental_impact": j.get("environmental_impact") or j.get("impact") or "",
+                    "points_earned": int(j.get("points_earned") or j.get("points") or 0),
+                }
+                return normalized
+        except Exception as e:
+            last_err.append(("client.generate_text/fallback", str(e)))
 
         # If none worked
         err_msg = "None of the supported Gemini SDK call patterns were found or all failed. Attempts:\n"
