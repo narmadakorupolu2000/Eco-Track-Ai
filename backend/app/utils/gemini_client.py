@@ -11,17 +11,54 @@ import asyncio
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 CLOUDINARY_URL = os.getenv("CLOUDINARY_URL", "").strip()
 
-# Lazy import of the Google GenAI SDK to avoid import-time errors if SDK isn't installed
+# Lazy import helper for the Gemini SDK.
 _genai = None
 def _ensure_genai():
+    """
+    Try to locate a Google Gemini / Generative AI SDK under common package names.
+    If not present, raise a RuntimeError with actionable instructions.
+    """
     global _genai
-    if _genai is None:
-        try:
-            from google import genai
-            _genai = genai
-        except Exception as e:
-            raise RuntimeError("Gemini SDK (google.generative AI) not installed") from e
-    return _genai
+    if _genai is not None:
+        return _genai
+
+    # Try a few common import styles that different SDK versions expose.
+    # We prefer 'from google import genai' as used in many examples.
+    try:
+        # Example modern import used in many docs: from google import genai
+        from google import genai  # type: ignore
+        _genai = genai
+        return _genai
+    except Exception:
+        pass
+
+    try:
+        # Fallback: some packages expose a module like google.generativeai
+        import google.generativeai as genai  # type: ignore
+        _genai = genai
+        return _genai
+    except Exception:
+        pass
+
+    # Not found — raise a helpful error for the operator
+    # Provide both common pip commands (package naming varies)
+    msg_lines = [
+        "Gemini client SDK not found (needed for AI generation/classification).",
+        "",
+        "To enable Gemini features, install the official SDK in the runtime environment.",
+        "Common install commands to try (pick one):",
+        "  pip install google-generative-ai",
+        "  pip install google-genai",
+        "",
+        "Notes:",
+        "- Ensure your Python version is compatible with the SDK (use Python 3.10+ if possible).",
+        "- If you're building inside Docker, add the chosen pip command to your Dockerfile or backend requirements.",
+        "- If the package is hosted on a private index, provide --extra-index-url accordingly.",
+        "",
+        "After installing, restart the application.",
+    ]
+    raise RuntimeError("\n".join(msg_lines))
+
 
 def upload_to_cloudinary(file_bytes: bytes, filename: str, mime: str = "image/jpeg") -> str:
     """Upload bytes to Cloudinary using signed upload and return secure URL.
@@ -50,88 +87,93 @@ def upload_to_cloudinary(file_bytes: bytes, filename: str, mime: str = "image/jp
     j = resp.json()
     return j.get("secure_url")
 
+
 async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
     """
     Generate text from Gemini. Returns plain text.
     This function is async so tests and callers can await it and mocks can use AsyncMock.
     """
     if not GEMINI_API_KEY:
-        raise HTTPException = None  # helper for linter; actual exception below
         raise RuntimeError("GEMINI_API_KEY not configured")
 
     # Ensure SDK is available
     genai = _ensure_genai()
+
     # create client
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    # Some SDKs expose Client as genai.Client, others may have different factory functions.
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception:
+        # If Client constructor fails, try older or alternate call styles
+        try:
+            client = genai
+        except Exception as e:
+            raise RuntimeError(f"Failed to construct Gemini client: {e}")
 
-    # Use a lightweight, currently available Gemini model for text (choose an appropriate model)
-    model = "models/gemini-1.0"  # use a stable model that supports text generation
+    # Choose a text-capable model; may need adjustment for your SDK / account
+    model = "models/gemini-1.0"
 
-    # Build the input; using a simple text prompt for generation
     def _call_sync():
-        # Using interactions.create for flexible input
         try:
             interaction = client.interactions.create(
                 model=model,
                 input=prompt,
-                # generation_config can be extended as needed
                 generation_config={"max_output_tokens": max_output_tokens}
             )
-            # The SDK response layout can vary; safely extract the assistant text
-            # Prefer the last step text if using interactions
+
+            # Extract text from the response robustly
             text = None
-            if hasattr(interaction, "output") and interaction.output:
-                # interaction.output might be a string or object
-                if isinstance(interaction.output, str):
-                    text = interaction.output
-                else:
-                    # try canonical fields
-                    if isinstance(interaction.output, dict):
-                        # Some SDKs put content under 'content' or 'text'
-                        if "content" in interaction.output and isinstance(interaction.output["content"], list):
-                            # join text blocks
-                            pieces = []
-                            for block in interaction.output["content"]:
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    pieces.append(block.get("text", ""))
-                                elif isinstance(block, str):
-                                    pieces.append(block)
-                            text = "\n".join(pieces).strip()
-                        elif "text" in interaction.output:
-                            text = interaction.output.get("text")
-            # Fallback: str(interaction)
+            if hasattr(interaction, "steps") and interaction.steps:
+                last = interaction.steps[-1]
+                text = getattr(last, "output", None) or str(last)
+            elif hasattr(interaction, "output") and interaction.output:
+                out = interaction.output
+                if isinstance(out, str):
+                    text = out
+                elif isinstance(out, dict) and "content" in out:
+                    content = out.get("content")
+                    if isinstance(content, list):
+                        pieces = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                pieces.append(block.get("text", ""))
+                            elif isinstance(block, str):
+                                pieces.append(block)
+                        text = "\n".join(pieces).strip()
+                    else:
+                        text = str(content)
             if not text:
                 text = str(interaction)
             return text
         except Exception as e:
             raise
 
-    # Run the blocking SDK call in a thread to keep this function async
     try:
         loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, _call_sync)
         return text
     except Exception as e:
-        # Do not leak API key or SDK internals
         raise RuntimeError(f"Text generation error: {e}")
+
 
 async def classify_image(image_url: str) -> Dict[str, Any]:
     """
     Multimodal image classification with Gemini.
-    Returns a parsed JSON-like dict with expected keys such as:
+    Returns a parsed JSON-like dict with keys:
       category, confidence, disposal, tips, environmental_impact, points_earned
-    The function is async and raises on failure.
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not configured")
 
     genai = _ensure_genai()
-    client = genai.Client(api_key=GEMINI_API_KEY)
 
-    # Model choice for multimodal tasks - pick a multimodal-capable model
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception:
+        client = genai  # fallback; tests often monkeypatch gemini_client.classify_image directly
+
     model = "models/gemini-1.0"
 
-    # Clear instruction asking for strict JSON output
     instruction = (
         "You are given an image URL showing a single item of waste. Analyze the image and return ONLY valid JSON (no surrounding text). "
         "The JSON must include these fields:\n"
@@ -144,13 +186,8 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
         "Return ONLY a single JSON object conforming to the above. If unsure, make conservative answers. "
     )
 
-    # Build a multimodal input (image + instruction)
-    # The final structure depends on SDK, so use interactions.create with a composite input if supported.
     def _call_sync():
         try:
-            # Use interactions.create with an input that includes the image URL and the instruction
-            # Note: SDK shapes can vary; the test suite will mock this function, but in real runs this may
-            # need to adapt to the specific SDK version.
             interaction = client.interactions.create(
                 model=model,
                 input=[
@@ -160,7 +197,6 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
                 generation_config={"max_output_tokens": 1024}
             )
 
-            # Extract raw text from the result
             raw_text = ""
             if hasattr(interaction, "steps") and interaction.steps:
                 last = interaction.steps[-1]
@@ -170,7 +206,6 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
                 if isinstance(out, str):
                     raw_text = out
                 elif isinstance(out, dict) and "content" in out:
-                    # join text blocks if present
                     content = out.get("content")
                     if isinstance(content, list):
                         pieces = []
@@ -187,7 +222,6 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
             else:
                 raw_text = str(interaction)
 
-            # Try to extract a JSON object from the returned text
             j = None
             try:
                 j = json.loads(raw_text)
@@ -202,7 +236,6 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
             if not j or not isinstance(j, dict):
                 raise RuntimeError("AI returned non-JSON or invalid JSON for image classification")
 
-            # Normalize keys to expected shape
             normalized = {
                 "category": j.get("category") or j.get("type") or j.get("classification") or "Unknown",
                 "confidence": float(j.get("confidence") or j.get("score") or 0.0),
@@ -213,7 +246,6 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
             }
             return normalized
         except Exception as e:
-            # bubble up to caller
             raise
 
     try:
