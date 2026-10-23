@@ -12,7 +12,7 @@ from google.genai import types
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 CLOUDINARY_URL = os.getenv("CLOUDINARY_URL", "").strip()
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 
 
 def _get_client() -> genai.Client:
