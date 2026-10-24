@@ -55,7 +55,7 @@ RECIPIENT_EMAIL = "jayanthkorupolu.2000@gmail.com"
 # Comma-separated list of allowed frontend origins (CORS)
 # Include both localhost and 127.0.0.1 for local development, all common ports
 # Also include "null" for file:// protocol testing
-default_origins = "http://localhost,http://localhost:3000,http://localhost:3001,http://localhost:8000,http://127.0.0.1,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:8000,https://eco-track-ai.vercel.app,null"
+default_origins = "http://localhost,http://localhost:3000,http://localhost:3001,http://localhost:8000,http://127.0.0.1,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:8000,https://eco[...]
 FRONTEND_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", default_origins).split(",") if o.strip()]
 
 
@@ -71,7 +71,7 @@ app.include_router(debug_genai_signatures_full_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],  # Expose all response headers
