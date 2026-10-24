@@ -51,6 +51,7 @@ RECIPIENT_EMAIL = "jayanthkorupolu.2000@gmail.com"
 # Comma-separated list of allowed frontend origins (CORS)
 # Include both localhost and 127.0.0.1 for local development, all common ports
 # Also include "null" for file:// protocol testing
+
 default_origins = (
     "http://localhost,"
     "http://localhost:3000,"
@@ -59,7 +60,9 @@ default_origins = (
     "http://127.0.0.1,"
     "http://127.0.0.1:3000,"
     "http://127.0.0.1:3001,"
-    "http://127.0.0.1:8000"
+    "http://127.0.0.1:8000",
+    "https://eco-track-ai.vercel.app",
+    "https://www.eco-track-ai.vercel.app"
 )
 FRONTEND_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", default_origins).split(",") if o.strip()]
 
