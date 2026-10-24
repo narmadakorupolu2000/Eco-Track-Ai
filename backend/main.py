@@ -79,7 +79,14 @@ app.include_router(debug_genai_signatures_full_router)
 # --- Middleware ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=FRONTEND_ORIGINS if FRONTEND_ORIGINS else ["*"],
+    allow_origins=[
+        "http://localhost",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://rebrand-eco-track-ai-oneqneg.netlify.app",
+        "https://eco-track-ai.onrender.com",
+        "https://eco-track-ai.vercel.app",
+    ],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
