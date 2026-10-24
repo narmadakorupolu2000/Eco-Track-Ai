@@ -12,7 +12,7 @@ from google.genai import types
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 CLOUDINARY_URL = os.getenv("CLOUDINARY_URL", "").strip()
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-2.0-flash"
 
 
 def _get_client() -> genai.Client:
@@ -43,7 +43,6 @@ def _extract_text(response: Any) -> str:
             if collected:
                 return "\n".join(collected).strip()
 
-    # Final fallback: string representation
     if response is not None:
         return str(response).strip()
     return ""
@@ -102,8 +101,9 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
     client = _get_client()
 
     instruction = (
-        "Analyze this waste image and return ONLY valid JSON with the fields: "
-        "category, confidence, disposal, tips, environmental_impact, points_earned."
+        "Analyze this waste image and return ONLY valid JSON with fields: "
+        "category, confidence, disposal, tips, environmental_impact, points_earned. "
+        "Keep the response strictly valid JSON with no markdown fences."
     )
 
     def _call_sync() -> Dict[str, Any]:
