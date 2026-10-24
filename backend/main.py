@@ -33,6 +33,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from fastapi import Request
 from app.utils.perplexity_client import classify_image_with_perplexity, upload_to_cloudinary
+from app.routers.auth import router as auth_router
+from app.routers.users import router as users_router
 from app.routers.chat import router as chat_router
 from app.routers.waste_classification import router as waste_classification_router
 from app.routers.debug_genai import router as debug_genai_router
@@ -66,6 +68,10 @@ default_origins = ",".join([
     "https://www.eco-track-ai.onrender.com",
     "https://eco-track-ai.netlify.app",
     "https://www.eco-track-ai.netlify.app",
+    "https://rebrand-eco-track-ai-oneqneg.netlify.app",
+    "https://www.rebrand-eco-track-ai-oneqneg.netlify.app",
+    "https://greenwise-ai.netlify.app",
+    "https://www.greenwise-ai.netlify.app",
 ])
 FRONTEND_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", default_origins).split(",") if o.strip()]
 app = FastAPI(
@@ -73,6 +79,8 @@ app = FastAPI(
     description="Unified Backend API for EcoTrack - Environmental Tracking Application",
     version="3.0.0"
 )
+app.include_router(auth_router, prefix="/api/auth")
+app.include_router(users_router, prefix="/api/user")
 app.include_router(debug_genai_router)
 app.include_router(debug_genai_signature_router)
 app.include_router(debug_genai_signatures_full_router)
@@ -84,6 +92,9 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://rebrand-eco-track-ai-oneqneg.netlify.app",
+        "https://www.rebrand-eco-track-ai-oneqneg.netlify.app",
+        "https://greenwise-ai.netlify.app",
+        "https://www.greenwise-ai.netlify.app",
         "https://eco-track-ai.onrender.com",
         "https://eco-track-ai.vercel.app",
     ],
