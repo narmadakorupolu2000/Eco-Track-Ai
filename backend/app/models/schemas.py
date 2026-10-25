@@ -67,6 +67,14 @@ class WasteClassification(BaseModel):
 class WasteClassificationCreate(BaseModel):
     image_url: str
 
+class WasteClassificationResult(BaseModel):
+    category: str
+    confidence: float
+    disposal: str
+    tips: list[str]
+    environmental_impact: str
+    points_earned: int
+
 class WasteClassificationInDB(WasteClassification):
     id: str
     created_at: datetime
