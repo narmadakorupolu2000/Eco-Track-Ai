@@ -16,20 +16,21 @@ from app.utils.gemini_client import upload_to_cloudinary, classify_image
 router = APIRouter()
 
 
+
 @router.post("/classify", response_model=WasteClassificationResult)
 async def classify_waste(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Upload an image and return the six-field waste classification result."""
+    """Classify waste or explain what a non-waste image contains."""
 
-    # Validate the uploaded file type.
+    # Validate uploaded file type.
     allowed_types = {"image/jpeg", "image/png", "image/webp"}
 
     if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=415,
-            detail="Unsupported file type. Upload a JPG, PNG, or WEBP image of waste.",
+            detail="Unsupported file type. Upload a JPG, PNG, or WEBP image.",
         )
 
     contents = await file.read()
@@ -37,7 +38,7 @@ async def classify_waste(
     if not contents:
         raise HTTPException(
             status_code=400,
-            detail="The uploaded file is empty. Please upload a waste image.",
+            detail="The uploaded file is empty. Please upload an image.",
         )
 
     if len(contents) > 10 * 1024 * 1024:
@@ -46,12 +47,12 @@ async def classify_waste(
             detail="Image is too large. Please upload an image smaller than 10 MB.",
         )
 
-    # Upload the image.
+    # Upload image to Cloudinary.
     try:
         image_url = upload_to_cloudinary(
             contents,
-            file.filename or "waste-image",
-            file.content_type or "image/jpeg",
+            file.filename or "uploaded-image",
+            file.content_type,
         )
     except Exception as exc:
         raise HTTPException(
@@ -59,7 +60,7 @@ async def classify_waste(
             detail=f"Failed to upload image: {exc}",
         ) from exc
 
-    # Classify the image using Gemini.
+    # Classify image using Gemini.
     try:
         parsed = await classify_image(image_url)
     except Exception as exc:
@@ -68,24 +69,71 @@ async def classify_waste(
             detail=f"Classification service error: {exc}",
         ) from exc
 
-    
-    
+    # Read Gemini's waste validation fields.
+    is_waste = parsed.get("is_waste", False)
+    if not isinstance(is_waste, bool):
+        is_waste = str(is_waste).strip().lower() == "true"
+
+    message = str(parsed.get("message") or "").strip()
 
     category = str(parsed.get("category") or "Unknown")
-    confidence = float(parsed.get("confidence", 0.0))
+
+    try:
+        confidence = float(parsed.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    # Keep confidence within the percentage range expected by the frontend.
+    # Gemini may return either 0.95 or 95.
+    if 0 <= confidence <= 1:
+        confidence *= 100
+
+    confidence = max(0.0, min(100.0, confidence))
+
     disposal = str(parsed.get("disposal") or "")
-    tips = parsed.get("tips", [])
     environmental_impact = str(
         parsed.get("environmental_impact") or ""
     )
-    points_earned = int(parsed.get("points_earned", 10))
 
-    if not isinstance(tips, list):
-        tips = [tips] if isinstance(tips, str) else []
+    tips = parsed.get("tips", [])
+    if isinstance(tips, str):
+        tips = [tips]
+    elif not isinstance(tips, list):
+        tips = []
 
-    tips = [str(tip) for tip in tips if str(tip).strip()]
+    tips = [
+        str(tip).strip()
+        for tip in tips
+        if str(tip).strip()
+    ]
 
-    # Store both the existing history fields and the new classification fields.
+    # Non-waste images must not receive waste classification points.
+    if not is_waste:
+        category = (
+            "Unknown" if category == "Unknown" else "Non-Waste Image"
+        )
+        disposal = "No waste disposal recommendation is applicable."
+        tips = []
+        environmental_impact = (
+            "No waste-related environmental impact can be determined from this image."
+        )
+        points_earned = 0
+
+        if not message:
+            message = (
+                "This image does not appear to show a waste item."
+                if category != "Unknown"
+                else "The image could not be classified clearly."
+            )
+    else:
+        try:
+            points_earned = int(parsed.get("points_earned", 10))
+        except (TypeError, ValueError):
+            points_earned = 10
+
+        points_earned = max(0, points_earned)
+
+    # Store the result while preserving fields used by existing history APIs.
     now = datetime.utcnow()
 
     classification_record = {
@@ -99,6 +147,8 @@ async def classify_waste(
         "tips": tips,
         "environmental_impact": environmental_impact,
         "points_earned": points_earned,
+        "is_waste": is_waste,
+        "message": message,
         "date": now,
         "created_at": now,
     }
@@ -113,7 +163,7 @@ async def classify_waste(
             detail=f"Failed to save classification: {exc}",
         ) from exc
 
-    # Return exactly the six fields required by ClassificationResult.
+    # Return exactly the six fields expected by the current frontend.
     return WasteClassificationResult(
         category=category,
         confidence=confidence,
@@ -122,6 +172,7 @@ async def classify_waste(
         environmental_impact=environmental_impact,
         points_earned=points_earned,
     )
+
 
 
 @router.get("/history", response_model=List[WasteClassificationInDB])
