@@ -68,15 +68,8 @@ async def classify_waste(
             detail=f"Classification service error: {exc}",
         ) from exc
 
-    # Reject unrelated, unclear, or non-waste images.
-    if not parsed.get("is_waste", True):
-        raise HTTPException(
-            status_code=422,
-            detail=parsed.get(
-                "message",
-                "Please upload a clear image of a waste item.",
-            ),
-        )
+    
+    
 
     category = str(parsed.get("category") or "Unknown")
     confidence = float(parsed.get("confidence", 0.0))
