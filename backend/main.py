@@ -832,24 +832,54 @@ async def register(user: UserCreate):
         created_at=user_data["created_at"]
     )
 
-@app.post("/api/auth/token")
-async def login(email: str = Form(...), password: str = Form(...)):
-    db = get_database()
-    user = await db.users.find_one({"email": email})
-    if not user or not verify_password(password, user["hashed_password"]):
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
 
-    access_token = create_access_token({"user_id": user["_id"]})
-    
+@app.post("/api/auth/token")
+async def login(
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    db = get_database()
+
+    user = await db.users.find_one({
+        "$or": [
+            {"email": username},
+            {"username": username},
+        ]
+    })
+
+    if not user or not verify_password(
+        password, user["hashed_password"]
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email/username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.get("is_active", True):
+        raise HTTPException(
+            status_code=400,
+            detail="Inactive user",
+        )
+
+    access_token = create_access_token({
+        "sub": user["email"],
+        "user_id": user["_id"],
+    })
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
         "user": User(
-            id=user["_id"], email=user["email"], username=user["username"],
-            full_name=user.get("full_name"), is_active=user.get("is_active", True),
-            created_at=user["created_at"]
-        )
+            id=user["_id"],
+            email=user["email"],
+            username=user["username"],
+            full_name=user.get("full_name"),
+            is_active=user.get("is_active", True),
+            created_at=user["created_at"],
+        ),
     }
+
 
 @app.get("/api/auth/me", response_model=User)
 async def get_current_user_profile(current_user: dict = Depends(get_current_user)):
