@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from app.models.schemas import UserCreate, User, Token, UserUpdate
 from app.auth import verify_password, get_password_hash, create_access_token, verify_token
-from app.database import get_database
+from main import get_database
 from datetime import datetime, timedelta
 from typing import Optional
 import pymongo
