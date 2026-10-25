@@ -100,44 +100,82 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
 
 async def classify_image(image_url: str) -> Dict[str, Any]:
     client = _get_client()
-
     instruction = """
-    You are a waste-image classification assistant.
+You are an intelligent image analysis and waste classification assistant.
 
-    First determine whether the image clearly shows a physical waste item
-    or discarded material that can reasonably be classified as waste.
+Analyze EVERY uploaded image, even if it does not contain waste.
+Do not reject an image just because it is unrelated to waste.
 
-    Return ONLY valid JSON using this structure:
-    {
-      "is_waste": true,
-      "message": "",
-      "category": "Plastic",
-      "confidence": 0.95,
-      "disposal": "Rinse and place in an appropriate plastic recycling bin if accepted locally.",
-      "tips": [
-        "Remove food residue before recycling.",
-        "Check local recycling guidelines."
-      ],
-      "environmental_impact": "Plastic waste can persist in the environment and harm wildlife.",
-      "points_earned": 10
-    }
+Return ONLY valid JSON with exactly these fields:
+{
+  "is_waste": true,
+  "message": "",
+  "category": "Plastic",
+  "confidence": 0.95,
+  "disposal": "Rinse and place in an appropriate plastic recycling bin if accepted locally.",
+  "tips": [
+    "Remove food residue before recycling.",
+    "Check local recycling guidelines."
+  ],
+  "environmental_impact": "Plastic waste can persist in the environment and harm wildlife.",
+  "points_earned": 10
+}
 
-    Rules:
-    1. Set is_waste to false if the image is not a waste item, is unrelated,
-       is blank, is too unclear to classify, or does not provide sufficient
-       visual evidence of waste.
-    2. For invalid images, set message to a short, helpful explanation,
-       such as "Please upload a clear image of a waste item."
-    3. For invalid images, set category to "Unknown", confidence to 0,
-       disposal to "", tips to [], environmental_impact to "",
-       and points_earned to 0.
-    4. Never invent details that cannot reasonably be inferred from the image.
-    5. For valid waste images, is_waste must be true and message must be "".
-    6. Confidence must be a number between 0 and 1.
-    7. tips must always be an array of strings.
-    8. points_earned must be 10 for a valid classification.
-    9. Return JSON only. Do not include Markdown or explanations outside JSON.
-    """
+RULES:
+
+1. Analyze the actual contents of the image. It may contain waste,
+   people, animals, vehicles, buildings, landscapes, food, products,
+   or other objects.
+
+2. If the image clearly shows a waste item or discarded material:
+   - Set "is_waste" to true.
+   - Set "message" to an empty string.
+   - Set "category" to the appropriate waste category.
+   - Provide practical disposal or recycling instructions.
+   - Provide useful waste-management tips in an array of strings.
+   - Explain the environmental impact of the identified waste.
+   - Set "points_earned" to 10.
+
+3. If the image does NOT show waste:
+   - Set "is_waste" to false.
+   - Set "message" to a brief description of what the image shows
+     and explain that it does not appear to contain waste.
+   - Set "category" to "Non-Waste Image".
+   - Set "confidence" to your confidence in the image assessment.
+   - Set "disposal" to "No waste disposal recommendation is applicable."
+   - Set "tips" to an empty array: [].
+   - Set "environmental_impact" to
+     "No waste-related environmental impact can be determined from this image."
+   - Set "points_earned" to 0.
+
+4. If the image is blank, corrupted, too blurry, or unclear:
+   - Set "is_waste" to false.
+   - Set "message" to explain that the image cannot be classified clearly
+     and ask the user to upload a clearer image.
+   - Set "category" to "Unknown".
+   - Set "confidence" to 0.
+   - Set "disposal" to an empty string.
+   - Set "tips" to an empty array: [].
+   - Set "environmental_impact" to an empty string.
+   - Set "points_earned" to 0.
+
+5. Never invent objects, waste categories, disposal methods, or
+   environmental impacts that are not reasonably supported by the image.
+
+6. "confidence" must be a numeric probability between 0 and 1.
+
+7. "tips" must ALWAYS be an array of strings, never a single string
+   or null.
+
+8. "points_earned" must be 10 only for a valid waste classification.
+   Non-waste and unclear images must receive 0 points.
+
+9. Always return all eight fields, with the correct data types.
+
+10. Return valid JSON only. Do not include Markdown, code fences,
+    or explanations outside the JSON object.
+"""
+
 
     def _call_sync() -> Dict[str, Any]:
         response = client.models.generate_content(
