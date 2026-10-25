@@ -8,7 +8,7 @@ from typing import Optional
 import pymongo
 
 router = APIRouter()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     """Get current authenticated user"""
