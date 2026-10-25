@@ -101,10 +101,43 @@ async def generate_text(prompt: str, max_output_tokens: int = 1024) -> str:
 async def classify_image(image_url: str) -> Dict[str, Any]:
     client = _get_client()
 
-    instruction = (
-        "Analyze this waste image and return ONLY valid JSON with the fields: "
-        "category, confidence, disposal, tips, environmental_impact, points_earned."
-    )
+    instruction = """
+    You are a waste-image classification assistant.
+
+    First determine whether the image clearly shows a physical waste item
+    or discarded material that can reasonably be classified as waste.
+
+    Return ONLY valid JSON using this structure:
+    {
+      "is_waste": true,
+      "message": "",
+      "category": "Plastic",
+      "confidence": 0.95,
+      "disposal": "Rinse and place in an appropriate plastic recycling bin if accepted locally.",
+      "tips": [
+        "Remove food residue before recycling.",
+        "Check local recycling guidelines."
+      ],
+      "environmental_impact": "Plastic waste can persist in the environment and harm wildlife.",
+      "points_earned": 10
+    }
+
+    Rules:
+    1. Set is_waste to false if the image is not a waste item, is unrelated,
+       is blank, is too unclear to classify, or does not provide sufficient
+       visual evidence of waste.
+    2. For invalid images, set message to a short, helpful explanation,
+       such as "Please upload a clear image of a waste item."
+    3. For invalid images, set category to "Unknown", confidence to 0,
+       disposal to "", tips to [], environmental_impact to "",
+       and points_earned to 0.
+    4. Never invent details that cannot reasonably be inferred from the image.
+    5. For valid waste images, is_waste must be true and message must be "".
+    6. Confidence must be a number between 0 and 1.
+    7. tips must always be an array of strings.
+    8. points_earned must be 10 for a valid classification.
+    9. Return JSON only. Do not include Markdown or explanations outside JSON.
+    """
 
     def _call_sync() -> Dict[str, Any]:
         response = client.models.generate_content(
@@ -131,15 +164,82 @@ async def classify_image(image_url: str) -> Dict[str, Any]:
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Gemini returned invalid JSON: {text}") from exc
 
-        normalized = {
-            "category": parsed.get("category") or parsed.get("type") or parsed.get("classification") or "Unknown",
-            "confidence": float(parsed.get("confidence") or parsed.get("score") or 0.0),
-            "disposal": parsed.get("disposal") or parsed.get("recommendations") or "",
-            "tips": parsed.get("tips") or [],
-            "environmental_impact": parsed.get("environmental_impact") or parsed.get("impact") or "",
-            "points_earned": int(parsed.get("points_earned") or parsed.get("points") or 0),
+        if not isinstance(parsed, dict):
+            raise RuntimeError("Gemini returned an unexpected JSON structure")
+
+        is_waste = parsed.get("is_waste", True)
+        message = str(parsed.get("message") or "").strip()
+
+        if not isinstance(is_waste, bool):
+            is_waste = str(is_waste).strip().lower() == "true"
+
+        if not is_waste:
+            return {
+                "is_waste": False,
+                "message": message or "Please upload a clear image of a waste item.",
+                "category": "Unknown",
+                "confidence": 0.0,
+                "disposal": "",
+                "tips": [],
+                "environmental_impact": "",
+                "points_earned": 0,
+            }
+
+        category = (
+            parsed.get("category")
+            or parsed.get("type")
+            or parsed.get("classification")
+            or "Unknown"
+        )
+
+        try:
+            confidence = float(
+                parsed.get("confidence", parsed.get("score", 0.0)) or 0.0
+            )
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        # Gemini supplies a probability from 0 to 1.
+        # The frontend expects a percentage from 0 to 100.
+        if 0 <= confidence <= 1:
+            confidence *= 100
+
+        confidence = max(0.0, min(100.0, confidence))
+
+        disposal = (
+            parsed.get("disposal")
+            or parsed.get("recommendations")
+            or ""
+        )
+
+        tips = parsed.get("tips", [])
+        if isinstance(tips, str):
+            tips = [tips]
+        elif not isinstance(tips, list):
+            tips = []
+
+        tips = [
+            str(tip).strip()
+            for tip in tips
+            if str(tip).strip()
+        ]
+
+        environmental_impact = (
+            parsed.get("environmental_impact")
+            or parsed.get("impact")
+            or ""
+        )
+
+        return {
+            "is_waste": True,
+            "message": "",
+            "category": str(category),
+            "confidence": confidence,
+            "disposal": str(disposal),
+            "tips": tips,
+            "environmental_impact": str(environmental_impact),
+            "points_earned": 10,
         }
-        return normalized
 
     try:
         loop = asyncio.get_running_loop()
