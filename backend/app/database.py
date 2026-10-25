@@ -53,11 +53,15 @@ async def close_mongo_connection():
 
 
 def get_database():
-    """Return the initialized MongoDB database."""
-    if database is None:
+    """Get the database initialized by the main application."""
+    from main import mongodb_client, DATABASE_NAME
+
+    if mongodb_client is None:
+        from fastapi import HTTPException
+
         raise HTTPException(
             status_code=503,
             detail="Database connection not available",
         )
 
-    return database
+    return mongodb_client[DATABASE_NAME]
