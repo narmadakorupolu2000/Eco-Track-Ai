@@ -434,19 +434,37 @@ def decode_token(token: str) -> dict:
     except jwt.JWTError:
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> dict:
     token = credentials.credentials
     payload = decode_token(token)
+
     user_id = payload.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    
+    email = payload.get("sub")
+
+    if not user_id and not email:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authentication credentials",
+        )
+
     db = get_database()
-    user = await db.users.find_one({"_id": user_id})
+
+    if user_id:
+        user = await db.users.find_one({"_id": user_id})
+    else:
+        user = await db.users.find_one({"email": email})
+
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
+        raise HTTPException(
+            status_code=401,
+            detail="User not found",
+        )
+
     return user
+
 
 def calculate_level(total_points: int) -> str:
     if total_points >= 5000: return "Eco Legend"
